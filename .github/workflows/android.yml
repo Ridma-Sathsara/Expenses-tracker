@@ -1,0 +1,78 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and test
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Generate native Android project
+        run: npx expo prebuild --platform android --no-install
+        env:
+          CI: '1'
+
+      - name: Build release APK
+        working-directory: android
+        # arm64 only: covers practically every phone from the last ~8 years and keeps the APK small.
+        run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon
+
+      - name: Rename APK
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/ExpenseTracker-1.0.${BUILD_NUMBER}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ExpenseTracker-apk
+          path: dist/*.apk
+
+      # A GitHub Release makes the APK easy to download from a phone browser:
+      # https://github.com/<owner>/<repo>/releases/latest
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Expense Tracker 1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: dist/*.apk
+          body: |
+            Android build from `${{ github.ref_name }}` @ ${{ github.sha }}.
+
+            **Install:** download the `.apk` below on your Android phone, open it, and allow
+            "Install unknown apps" for your browser if asked.
