@@ -181,6 +181,18 @@ export async function ignoreSms(ids: string[]): Promise<void> {
   emitChange();
 }
 
+export async function countIgnoredSms(): Promise<number> {
+  const db = await getDb();
+  const r = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM sms_ignored');
+  return r?.n ?? 0;
+}
+
+export async function clearIgnoredSms(): Promise<void> {
+  const db = await getDb();
+  await db.execAsync('DELETE FROM sms_ignored;');
+  emitChange();
+}
+
 // ---- Settings ----
 
 export async function getSetting(key: string): Promise<string | null> {

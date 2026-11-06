@@ -27,11 +27,13 @@ function Root() {
   const [incoming, setIncoming] = useState<string | null>(null);
   const { sharedPayloads, clearSharedPayloads } = useIncomingShare();
 
-  // First run: pick a currency from the phone's region.
+  // Default to Rs. Version 1.0.1 guessed the currency from the phone region (often USD);
+  // switch that to Rs unless the user picked a currency themselves in Settings.
   useEffect(() => {
-    getSetting('currency').then((c) => {
-      if (!c) setSetting('currency', defaultCurrency());
-    });
+    (async () => {
+      const [c, userSet] = await Promise.all([getSetting('currency'), getSetting('currencyUserSet')]);
+      if (!c || (userSet !== '1' && c !== defaultCurrency())) await setSetting('currency', defaultCurrency());
+    })();
   }, []);
 
   // Text shared from another app (WhatsApp, Messages, …) goes to the chat.

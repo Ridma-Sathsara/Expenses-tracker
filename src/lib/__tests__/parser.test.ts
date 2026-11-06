@@ -48,6 +48,7 @@ test('bank SMS: credit and OTP are not expenses', () => {
   assert.equal(parseBankSms('LKR 50,000.00 credited to your A/C XXXX1234 on 01/11. Salary.', NOW).kind, 'credit');
   assert.equal(parseBankSms('Your OTP for the transaction of LKR 5,000.00 is 123456. Do not share.', NOW).kind, 'ignored');
   assert.equal(parseBankSms('Hey are we still meeting at 5?', NOW).kind, 'ignored');
+  assert.equal(parseBankSms('Hi, I owe you Rs 500 for dinner, remember?', NOW).kind, 'maybe');
 });
 
 test('quick entry: note then amount', () => {

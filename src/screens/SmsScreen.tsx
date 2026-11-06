@@ -2,13 +2,17 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { hasSmsPermission, isSmsSupported, requestSmsPermission } from '../../modules/sms-reader';
 import { getCategory } from '../lib/categories';
-import { ignoreSms, setSetting } from '../lib/db';
+import { clearIgnoredSms, countIgnoredSms, ignoreSms, setSetting } from '../lib/db';
 import { formatDay, formatMoney } from '../lib/format';
 import { useSettings } from '../lib/hooks';
 import { findSmsExpenses, importSmsCandidates, type SmsCandidate } from '../lib/sms';
 import { useTheme } from '../theme';
 
-const RANGES = [7, 30, 90];
+const RANGES = [
+  { days: 30, label: '30 days' },
+  { days: 90, label: '3 months' },
+  { days: 365, label: '1 year' },
+];
 
 export function SmsScreen() {
   const t = useTheme();
@@ -18,14 +22,18 @@ export function SmsScreen() {
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<SmsCandidate[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [skipped, setSkipped] = useState(0);
 
   const scan = useCallback(async () => {
     if (!granted) return;
     setLoading(true);
     try {
       const found = await findSmsExpenses(days);
+      // Clear expenses first, then the "maybe" ones; newest first within each group.
+      found.sort((a, b) => Number(b.sure) - Number(a.sure) || b.sms.date - a.sms.date);
       setItems(found);
-      setSelected(new Set(found.map((f) => f.sms.id)));
+      setSelected(new Set(found.filter((f) => f.sure).map((f) => f.sms.id)));
+      setSkipped(await countIgnoredSms());
     } catch (e) {
       Alert.alert('Could not read SMS', String(e));
     } finally {
@@ -110,11 +118,11 @@ export function SmsScreen() {
         <View style={{ flexDirection: 'row', gap: 8 }}>
           {RANGES.map((r) => (
             <Pressable
-              key={r}
-              onPress={() => setDays(r)}
-              style={[styles.chip, { borderColor: r === days ? t.primary : t.border, backgroundColor: r === days ? t.primary + '22' : 'transparent' }]}
+              key={r.days}
+              onPress={() => setDays(r.days)}
+              style={[styles.chip, { borderColor: r.days === days ? t.primary : t.border, backgroundColor: r.days === days ? t.primary + '22' : 'transparent' }]}
             >
-              <Text style={{ color: t.text }}>{r} days</Text>
+              <Text style={{ color: t.text }}>{r.label}</Text>
             </Pressable>
           ))}
         </View>
@@ -129,8 +137,23 @@ export function SmsScreen() {
           contentContainerStyle={{ padding: 16, paddingBottom: 100, gap: 8 }}
           ListEmptyComponent={
             <Text style={{ color: t.muted, textAlign: 'center', marginTop: 40 }}>
-              No new bank transactions found in the last {days} days.
+              No new bank transactions found in this period.
             </Text>
+          }
+          ListFooterComponent={
+            skipped > 0 ? (
+              <Pressable
+                onPress={async () => {
+                  await clearIgnoredSms();
+                  scan();
+                }}
+                style={{ paddingVertical: 16, alignItems: 'center' }}
+              >
+                <Text style={{ color: t.primary, fontWeight: '600' }}>
+                  Show {skipped} skipped message{skipped === 1 ? '' : 's'} again
+                </Text>
+              </Pressable>
+            ) : undefined
           }
           renderItem={({ item }) => {
             const on = selected.has(item.sms.id);
@@ -141,6 +164,9 @@ export function SmsScreen() {
                   <Text style={{ color: t.text, fontWeight: '700', flex: 1 }} numberOfLines={1}>
                     {on ? '☑️' : '⬜'} {c.emoji} {item.expense.note}
                   </Text>
+                  {!item.sure ? (
+                    <Text style={[styles.maybe, { color: t.muted, borderColor: t.border }]}>Maybe</Text>
+                  ) : null}
                   <Text style={{ color: t.text, fontWeight: '700' }}>{formatMoney(item.expense.amount, currency)}</Text>
                 </View>
                 <Text style={{ color: t.muted, fontSize: 12, marginTop: 2 }}>
@@ -175,5 +201,6 @@ const styles = StyleSheet.create({
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   chip: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 5 },
   button: { borderRadius: 12, paddingVertical: 14, paddingHorizontal: 24, alignItems: 'center' },
+  maybe: { fontSize: 11, borderWidth: 1, borderRadius: 8, paddingHorizontal: 6, marginRight: 8 },
   footer: { position: 'absolute', left: 16, right: 16, bottom: 16, flexDirection: 'row' },
 });

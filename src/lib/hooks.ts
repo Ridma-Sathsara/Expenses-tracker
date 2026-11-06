@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getLocales } from 'expo-localization';
 import { getSetting, onDataChange, setSetting } from './db';
 
 /** A counter that bumps whenever expenses or settings change, to trigger reloads. */
@@ -21,17 +20,14 @@ export function useLoad<T>(load: () => Promise<T>, initial: T, deps: unknown[] =
   return [data, reload];
 }
 
+/** Sri Lankan Rupees by default; can be changed in Settings. */
 export function defaultCurrency(): string {
-  try {
-    return getLocales()[0]?.currencyCode ?? 'USD';
-  } catch {
-    return 'USD';
-  }
+  return 'Rs';
 }
 
 export type Settings = { currency: string; budget: number; smsAutoImport: boolean };
 
-export function useSettings(): Settings & { update: (k: keyof Settings, v: string) => Promise<void> } {
+export function useSettings(): Settings & { update: (k: keyof Settings | 'currencyUserSet', v: string) => Promise<void> } {
   const [s] = useLoad<Settings>(
     async () => ({
       currency: (await getSetting('currency')) ?? defaultCurrency(),

@@ -13,7 +13,9 @@
     "android": {
       "package": "com.ridmasathsara.expensetracker",
       "versionCode": 1,
-      "permissions": ["android.permission.READ_SMS"],
+      "permissions": [
+        "android.permission.READ_SMS"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -30,11 +32,17 @@
       [
         "expo-sharing",
         {
-          "android": { "enabled": true, "singleShareMimeTypes": ["text/plain"] },
-          "ios": { "enabled": false }
+          "android": {
+            "enabled": true,
+            "singleShareMimeTypes": [
+              "text/plain"
+            ]
+          },
+          "ios": {
+            "enabled": false
+          }
         }
-      ],
-      "expo-localization"
+      ]
     ]
   }
 }

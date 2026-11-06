@@ -23,11 +23,14 @@ export function SettingsScreen() {
   useEffect(() => setBudget(settings.budget ? String(settings.budget) : ''), [settings.budget]);
 
   const save = async () => {
-    const cur = currency.trim().toUpperCase().slice(0, 6);
+    const raw = currency.trim().slice(0, 6);
+    // Keep "Rs" as typed; upper-case codes like lkr -> LKR.
+    const cur = /^rs\.?$/i.test(raw) ? 'Rs' : raw.toUpperCase();
     const b = budget.trim() ? Number(budget.replace(/,/g, '')) : 0;
-    if (!cur) return Alert.alert('Currency is required', 'For example LKR, USD, INR or Rs.');
+    if (!cur) return Alert.alert('Currency is required', 'For example Rs, LKR or USD.');
     if (!Number.isFinite(b) || b < 0) return Alert.alert('Invalid budget', 'Enter a number, or leave it empty.');
     await settings.update('currency', cur);
+    await settings.update('currencyUserSet', '1');
     await settings.update('budget', String(b));
     Alert.alert('Saved');
   };
@@ -65,8 +68,8 @@ export function SettingsScreen() {
         <TextInput
           value={currency}
           onChangeText={setCurrency}
-          autoCapitalize="characters"
-          placeholder="LKR"
+          autoCapitalize="none"
+          placeholder="Rs"
           placeholderTextColor={t.muted}
           style={[styles.input, { color: t.text, borderColor: t.border }]}
         />

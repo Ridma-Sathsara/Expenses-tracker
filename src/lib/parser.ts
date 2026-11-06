@@ -22,26 +22,35 @@ export type ParsedExpense = {
 export type BankSmsResult =
   | { kind: 'debit'; expense: ParsedExpense }
   | { kind: 'credit'; amount: number }
+  /** Has an amount but no clear debit wording — offered to the user, unticked. */
+  | { kind: 'maybe'; expense: ParsedExpense }
   | { kind: 'ignored'; reason: string };
 
 const CURRENCY_TOKENS: Record<string, string> = {
-  lkr: 'LKR', slr: 'LKR', rs: 'Rs', 'rs.': 'Rs', inr: 'INR', '₹': 'INR', usd: 'USD', '$': 'USD',
+  lkr: 'LKR', slr: 'LKR', slrs: 'LKR', rs: 'Rs', 'rs.': 'Rs', inr: 'INR', '₹': 'INR', usd: 'USD', '$': 'USD',
   eur: 'EUR', '€': 'EUR', gbp: 'GBP', '£': 'GBP', aed: 'AED', sgd: 'SGD', aud: 'AUD', cad: 'CAD',
   pkr: 'PKR', bdt: 'BDT', npr: 'NPR', myr: 'MYR', rm: 'MYR', php: 'PHP', idr: 'IDR', thb: 'THB',
   kes: 'KES', ngn: 'NGN', zar: 'ZAR', qar: 'QAR', sar: 'SAR', omr: 'OMR', kwd: 'KWD', bhd: 'BHD',
   jpy: 'JPY', '¥': 'JPY', cny: 'CNY', mvr: 'MVR',
 };
 
-const CUR = '(LKR|SLR|Rs\\.?|INR|USD|EUR|GBP|AED|SGD|AUD|CAD|PKR|BDT|NPR|MYR|RM|PHP|IDR|THB|KES|NGN|ZAR|QAR|SAR|OMR|KWD|BHD|JPY|CNY|MVR|[$₹€£¥])';
+const CUR = '(LKR|SLRs?|Rs\\.?|INR|USD|EUR|GBP|AED|SGD|AUD|CAD|PKR|BDT|NPR|MYR|RM|PHP|IDR|THB|KES|NGN|ZAR|QAR|SAR|OMR|KWD|BHD|JPY|CNY|MVR|[$₹€£¥])';
 const NUM = '(\\d{1,3}(?:,\\d{2,3})+(?:\\.\\d{1,2})?|\\d+(?:\\.\\d{1,2})?)';
 const AMOUNT_RE = new RegExp(`${CUR}\\s?${NUM}|${NUM}\\s?${CUR}(?![a-z])`, 'gi');
 
-const OTP_RE = /\b(otp|one[\s-]?time[\s-]?(password|pin|code)|verification code|security code|do not share)\b/i;
-const DEBIT_RE = /\b(debited|debit|spent|purchase[ds]?|paid|payment of|withdrawn|withdrawal|charged|deducted|sent|txn of|transaction of|pos\b|used at|used for|trx)\b/i;
-const CREDIT_RE = /\b(credited|received|deposited|deposit|refund(ed)?|reversed|reversal|cashback|salary)\b/i;
-const BALANCE_BEFORE_RE = /(bal(ance)?|avl|avail(able)?|limit|outstanding|due|min(imum)?)\W*(is|:|of)?\W*$/i;
+// Only a real OTP message: an OTP word next to the code itself. Alerts that merely end with
+// "never share your OTP" are still transactions.
+const OTP_RE = /\b(otp|one[\s-]?time[\s-]?(password|pin|code)|verification code|security code|passcode)\b(?:[^.!]|\.(?=\d)){0,60}?(\bis|:|-)\W{0,3}\d{4,8}\b|\b\d{4,8}\b\W{0,3}is your\b.{0,30}\b(otp|code|password|pin)\b/i;
+// Clear signs of money going out.
+const DEBIT_RE = /\b(debited|debit|spent|purchased?|paid|payment|withdrawn|withdrawal|charged|deducted|sent|used at|used for|trx|dr)\b/i;
+// Weaker signs; only count when nothing in the message says money came in.
+const WEAK_DEBIT_RE = /\b(txn|transaction|transfer(red)?|ceft|slips|atm|e-?commerce|pos|amt|merchant)\b/i;
+const CREDIT_RE = /\b(credited|received from|deposited|deposit|refund(ed)?|reversed|reversal|cashback|salary|cr)\b/i;
+const PROMO_RE = /\b(offer|discount|\d+%|win|winner|promo|deal|sale|up ?to|reload now|dial|click|https?:|www\.|visit|t&c|hurry|limited time|valid (till|until)|free)\b/i;
+const LABELLED_AMOUNT_RE = new RegExp(`\\b(?:amt|amount|value)\\s*[:=]?\\s*${NUM}`, 'i');
+const BALANCE_BEFORE_RE = /(bal(ance)?|avl|avail(able)?|limit|lmt|outstanding|due|min(imum)?)\W*(is|:|of)?\W*$/i;
 
-const MERCHANT_TAIL = String.raw`([A-Za-z0-9][A-Za-z0-9&'.*\-_/ ]{1,40}?)(?=\s+(?:on|via|ref|using|with|from|dated|date|avl|avail|bal|card|a\/c|acct|txn|at|is|has|was|for)\b|\s*[.,;:(]|\s*$|\s+\d)`;
+const MERCHANT_TAIL = String.raw`([A-Za-z0-9][A-Za-z0-9&'.*\-_/ ]{1,40}?)(?=\s+(?:on|via|ref|using|with|from|dated|date|avl|avail|bal|card|a\/c|acct|txn|at|is|has|was|for|successful(ly)?|success|completed|complete|done|type|thank)\b|\s*[,;:(!]|\.(?:\s|$)|\s*$|\s+\d)`;
 // Tried in priority order: "at X" is the strongest merchant signal, "for X" the weakest.
 const MERCHANT_RES = [
   new RegExp(String.raw`(?:\bat|@)\s*` + MERCHANT_TAIL, 'i'),
@@ -103,23 +112,29 @@ export function parseBankSms(body: string, date: number = Date.now()): BankSmsRe
   if (!text) return { kind: 'ignored', reason: 'empty' };
   if (OTP_RE.test(text)) return { kind: 'ignored', reason: 'otp' };
 
-  const amounts = findAmounts(text);
-  if (amounts.length === 0) return { kind: 'ignored', reason: 'no amount' };
+  let amounts = findAmounts(text);
+  if (amounts.length === 0) {
+    // "Amt: 1,250.00" with no currency.
+    const m = text.match(LABELLED_AMOUNT_RE);
+    if (m) amounts = [{ amount: parseNumber(m[1]), currency: null, index: m.index ?? 0 }];
+  }
+  if (amounts.length === 0 || !(amounts[0].amount > 0)) return { kind: 'ignored', reason: 'no amount' };
 
   const debitIdx = text.search(DEBIT_RE);
   const creditIdx = text.search(CREDIT_RE);
   // Whichever keyword appears first wins ("debited ... reversal" is rare; "credited ... from" is common).
-  const isDebit = debitIdx >= 0 && (creditIdx < 0 || debitIdx < creditIdx);
+  const isDebit =
+    (debitIdx >= 0 && (creditIdx < 0 || debitIdx < creditIdx)) || (creditIdx < 0 && WEAK_DEBIT_RE.test(text));
   const isCredit = creditIdx >= 0 && !isDebit;
 
   if (isCredit) return { kind: 'credit', amount: amounts[0].amount };
-  if (!isDebit) return { kind: 'ignored', reason: 'not a transaction' };
+  if (!isDebit && PROMO_RE.test(text)) return { kind: 'ignored', reason: 'promotion' };
 
   const { amount, currency } = amounts[0];
   const merchant = findMerchant(text);
   const note = merchant ?? 'Card / bank payment';
   return {
-    kind: 'debit',
+    kind: isDebit ? 'debit' : 'maybe',
     expense: {
       amount,
       currency,
