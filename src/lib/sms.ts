@@ -1,10 +1,44 @@
 import { readInbox, hasSmsPermission, isSmsSupported, type Sms } from '../../modules/sms-reader';
 import { parseBankSms, type ParsedExpense } from './parser';
-import { addExpense, getHandledSmsIds, getSetting, setSetting } from './db';
+import { addExpense, deleteExpensesBySmsIds, getHandledSmsIds, getSetting, setSetting } from './db';
+import { DEFAULT_BLOCKED_SENDERS, isBlockedSender, normalizeSender } from './senders';
 
 export type SmsCandidate = { sms: Sms; expense: ParsedExpense; sure: boolean };
 
 const DAY = 24 * 60 * 60 * 1000;
+
+export async function getBlockedSenders(): Promise<string[]> {
+  const raw = await getSetting('blockedSenders');
+  if (raw == null) return DEFAULT_BLOCKED_SENDERS;
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter((x) => typeof x === 'string') : DEFAULT_BLOCKED_SENDERS;
+  } catch {
+    return DEFAULT_BLOCKED_SENDERS;
+  }
+}
+
+export async function setBlockedSenders(list: string[]): Promise<void> {
+  const clean = [...new Set(list.map(normalizeSender).filter(Boolean))];
+  await setSetting('blockedSenders', JSON.stringify(clean));
+  await removeBlockedSenderExpenses();
+}
+
+/**
+ * Deletes already-imported expenses whose SMS came from a blocked sender.
+ * Runs once per change of the blocked list (it reads the whole inbox, so not on every launch).
+ */
+export async function removeBlockedSenderExpenses(): Promise<number> {
+  if (!isSmsSupported || !hasSmsPermission()) return 0;
+  const blocked = await getBlockedSenders();
+  const key = JSON.stringify(blocked);
+  if ((await getSetting('blockedSendersCleaned')) === key) return 0;
+  const inbox = await readInbox(0, 50000);
+  const ids = inbox.filter((m) => isBlockedSender(m.address, m.body, blocked)).map((m) => m.id);
+  const removed = await deleteExpensesBySmsIds(ids);
+  await setSetting('blockedSendersCleaned', key);
+  return removed;
+}
 
 /**
  * SMS from the last `days` days that look like spending and are not yet imported/skipped.
@@ -12,10 +46,14 @@ const DAY = 24 * 60 * 60 * 1000;
  */
 export async function findSmsExpenses(days: number, includeMaybe = true): Promise<SmsCandidate[]> {
   if (!isSmsSupported || !hasSmsPermission()) return [];
-  const [messages, handled] = await Promise.all([readInbox(Date.now() - days * DAY, 5000), getHandledSmsIds()]);
+  const [messages, handled, blocked] = await Promise.all([
+    readInbox(Date.now() - days * DAY, 5000),
+    getHandledSmsIds(),
+    getBlockedSenders(),
+  ]);
   const out: SmsCandidate[] = [];
   for (const sms of messages) {
-    if (handled.has(sms.id)) continue;
+    if (handled.has(sms.id) || isBlockedSender(sms.address, sms.body, blocked)) continue;
     const r = parseBankSms(sms.body, sms.date);
     if (r.kind === 'debit') out.push({ sms, expense: r.expense, sure: true });
     else if (r.kind === 'maybe' && includeMaybe) out.push({ sms, expense: r.expense, sure: false });
@@ -45,6 +83,7 @@ export async function importSmsCandidates(list: SmsCandidate[]): Promise<number>
  */
 export async function autoImportSms(): Promise<number> {
   if (!isSmsSupported || !hasSmsPermission()) return 0;
+  await removeBlockedSenderExpenses();
   if ((await getSetting('smsAutoImport')) !== '1') return 0;
   const last = Number((await getSetting('smsLastSync')) ?? 0);
   // On the first run only look back 1 day; the SMS screen can import older ones.

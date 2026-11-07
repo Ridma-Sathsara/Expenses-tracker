@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { hasSmsPermission, isSmsSupported, requestSmsPermission } from '../../modules/sms-reader';
 import { getCategory } from '../lib/categories';
 import { clearIgnoredSms, countIgnoredSms, ignoreSms, setSetting } from '../lib/db';
 import { formatDay, formatMoney } from '../lib/format';
 import { useSettings } from '../lib/hooks';
-import { findSmsExpenses, importSmsCandidates, type SmsCandidate } from '../lib/sms';
+import { findSmsExpenses, getBlockedSenders, importSmsCandidates, setBlockedSenders, type SmsCandidate } from '../lib/sms';
 import { useTheme } from '../theme';
 
 const RANGES = [
@@ -23,6 +23,8 @@ export function SmsScreen() {
   const [items, setItems] = useState<SmsCandidate[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [skipped, setSkipped] = useState(0);
+  const [blocked, setBlocked] = useState<string[]>([]);
+  const [newSender, setNewSender] = useState('');
 
   const scan = useCallback(async () => {
     if (!granted) return;
@@ -34,6 +36,7 @@ export function SmsScreen() {
       setItems(found);
       setSelected(new Set(found.filter((f) => f.sure).map((f) => f.sms.id)));
       setSkipped(await countIgnoredSms());
+      setBlocked(await getBlockedSenders());
     } catch (e) {
       Alert.alert('Could not read SMS', String(e));
     } finally {
@@ -95,6 +98,12 @@ export function SmsScreen() {
     scan();
   };
 
+  const updateBlocked = async (list: string[]) => {
+    await setBlockedSenders(list);
+    setNewSender('');
+    scan();
+  };
+
   return (
     <View style={{ flex: 1 }}>
       <View style={[styles.card, { backgroundColor: t.card, margin: 16, marginBottom: 8 }]}>
@@ -109,6 +118,39 @@ export function SmsScreen() {
               await setSetting('smsAutoImport', v ? '1' : '0');
               if (v) await setSetting('smsLastSync', String(Date.now()));
             }}
+          />
+        </View>
+      </View>
+
+      <View style={[styles.card, { backgroundColor: t.card, marginHorizontal: 16, marginBottom: 8 }]}>
+        <Text style={{ color: t.text, fontWeight: '700' }}>Ignored senders</Text>
+        <Text style={{ color: t.muted, fontSize: 12, marginBottom: 8 }}>
+          SMS from these senders are never counted as expenses (already-imported ones are removed).
+        </Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          {blocked.map((b) => (
+            <Pressable
+              key={b}
+              onPress={() =>
+                Alert.alert(`Track ${b} again?`, `SMS from ${b} will be counted as expenses again.`, [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Unblock', onPress: () => updateBlocked(blocked.filter((x) => x !== b)) },
+                ])
+              }
+              style={[styles.chip, { borderColor: t.danger }]}
+            >
+              <Text style={{ color: t.text }}>🚫 {b} ✕</Text>
+            </Pressable>
+          ))}
+          <TextInput
+            value={newSender}
+            onChangeText={setNewSender}
+            placeholder="Add sender, e.g. HNB"
+            placeholderTextColor={t.muted}
+            autoCapitalize="characters"
+            onSubmitEditing={() => newSender.trim() && updateBlocked([...blocked, newSender])}
+            returnKeyType="done"
+            style={[styles.senderInput, { color: t.text, borderColor: t.border }]}
           />
         </View>
       </View>
@@ -201,6 +243,7 @@ const styles = StyleSheet.create({
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   chip: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 5 },
   button: { borderRadius: 12, paddingVertical: 14, paddingHorizontal: 24, alignItems: 'center' },
+  senderInput: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 4, minWidth: 150, fontSize: 14 },
   maybe: { fontSize: 11, borderWidth: 1, borderRadius: 8, paddingHorizontal: 6, marginRight: 8 },
   footer: { position: 'absolute', left: 16, right: 16, bottom: 16, flexDirection: 'row' },
 });

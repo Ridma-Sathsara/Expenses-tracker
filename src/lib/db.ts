@@ -181,6 +181,19 @@ export async function ignoreSms(ids: string[]): Promise<void> {
   emitChange();
 }
 
+/** Removes imported expenses that came from the given SMS ids. Returns how many were removed. */
+export async function deleteExpensesBySmsIds(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const db = await getDb();
+  let removed = 0;
+  for (const id of ids) {
+    const r = await db.runAsync('DELETE FROM expenses WHERE sms_id = ?', id);
+    removed += r.changes;
+  }
+  if (removed > 0) emitChange();
+  return removed;
+}
+
 export async function countIgnoredSms(): Promise<number> {
   const db = await getDb();
   const r = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM sms_ignored');
