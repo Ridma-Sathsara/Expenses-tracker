@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cashFlow } from '../ledger';
+import { balance, cashFlow, DEFAULT_OPENING_BALANCE } from '../ledger';
 import { parseBankSms } from '../parser';
 
 const FOOTER = '\nTo Inq Call 0112303050\nGet protected -Do not Share OTP';
@@ -54,4 +54,6 @@ test('the four alerts since 10 Nov net to +1,475', () => {
   assert.equal(entries.length, 4); // the 8 Nov POS purchase is before the tracking start
   const flow = cashFlow(entries);
   assert.deepEqual([flow.cashIn, flow.cashOut, flow.net], [29000, 27525, 1475]);
+  // Started with Rs 1,000: 1000 + 7000 - 8000 + 22000 - 19525
+  assert.equal(balance(DEFAULT_OPENING_BALANCE, flow), 2475);
 });

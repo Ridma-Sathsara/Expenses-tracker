@@ -1,7 +1,8 @@
 import { getCategory } from './categories';
 import { addExpense, deleteExpense, type Expense, type ExpenseSource, getDb, getTrackingStart, listExpenses } from './db';
 import { formatDate, formatDay, formatMoney, startOfDay } from './format';
-import { cashFlow, outlook, totalsByCategory } from './ledger';
+import { balance, cashFlow, outlook, totalsByCategory } from './ledger';
+import { getOpeningBalance } from './hooks';
 import { parseMessage } from './parser';
 
 export const HELP_TEXT = [
@@ -63,7 +64,16 @@ export async function handleChatMessage(text: string, currency: string, source: 
   if (cmd === 'month') return summary('this month', monthStart, today + DAY, currency);
   if (cmd === 'balance' || cmd === 'net' || cmd === 'total' || cmd === 'all') {
     const since = formatDate(await getTrackingStart());
-    return summary(`since ${since}`, 0, today + DAY, currency);
+    const opening = await getOpeningBalance();
+    const flow = cashFlow(await listExpenses(0, today + DAY));
+    const money = (n: number) => formatMoney(n, currency);
+    const now = balance(opening, flow);
+    return [
+      `🏦 Balance: ${now < 0 ? '−' : ''}${money(Math.abs(now))}`,
+      `Started with ${money(opening)} on ${since}`,
+      `💰 Cash in: +${money(flow.cashIn)} (${flow.countIn})`,
+      `💸 Cash out: −${money(flow.cashOut)} (${flow.countOut})`,
+    ].join('\n');
   }
   if (cmd === 'recent' || cmd === 'list') {
     const list = (await listExpenses(0, now + DAY)).slice(0, 8);

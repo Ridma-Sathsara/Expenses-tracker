@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getSetting, getTrackingStart, onDataChange, setSetting } from './db';
+import { DEFAULT_OPENING_BALANCE } from './ledger';
+
+export async function getOpeningBalance(): Promise<number> {
+  const raw = await getSetting('openingBalance');
+  const n = raw == null ? NaN : Number(raw);
+  return Number.isFinite(n) ? n : DEFAULT_OPENING_BALANCE;
+}
 
 /** A counter that bumps whenever expenses or settings change, to trigger reloads. */
 export function useDataVersion(): number {
@@ -25,17 +32,18 @@ export function defaultCurrency(): string {
   return 'Rs';
 }
 
-export type Settings = { currency: string; budget: number; smsAutoImport: boolean; trackingStart: number };
+export type Settings = { currency: string; budget: number; smsAutoImport: boolean; trackingStart: number; openingBalance: number };
 
-export function useSettings(): Settings & { update: (k: 'currency' | 'budget' | 'smsAutoImport' | 'currencyUserSet', v: string) => Promise<void> } {
+export function useSettings(): Settings & { update: (k: 'currency' | 'budget' | 'smsAutoImport' | 'currencyUserSet' | 'openingBalance', v: string) => Promise<void> } {
   const [s] = useLoad<Settings>(
     async () => ({
       currency: (await getSetting('currency')) ?? defaultCurrency(),
       budget: Number((await getSetting('budget')) ?? 0) || 0,
       smsAutoImport: (await getSetting('smsAutoImport')) === '1',
       trackingStart: await getTrackingStart(),
+      openingBalance: await getOpeningBalance(),
     }),
-    { currency: '', budget: 0, smsAutoImport: false, trackingStart: 0 },
+    { currency: '', budget: 0, smsAutoImport: false, trackingStart: 0, openingBalance: 0 },
   );
   return { ...s, update: (k, v) => setSetting(k, v) };
 }

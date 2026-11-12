@@ -19,9 +19,11 @@ export function SettingsScreen() {
   const [currency, setCurrency] = useState('');
   const [budget, setBudget] = useState('');
   const [startText, setStartText] = useState('');
+  const [opening, setOpening] = useState('');
 
   useEffect(() => setCurrency(settings.currency), [settings.currency]);
   useEffect(() => setBudget(settings.budget ? String(settings.budget) : ''), [settings.budget]);
+  useEffect(() => setOpening(String(settings.openingBalance)), [settings.openingBalance]);
   useEffect(() => setStartText(settings.trackingStart ? toIsoDate(settings.trackingStart) : ''), [settings.trackingStart]);
 
   const save = async () => {
@@ -31,6 +33,8 @@ export function SettingsScreen() {
     const b = budget.trim() ? Number(budget.replace(/,/g, '')) : 0;
     if (!cur) return Alert.alert('Currency is required', 'For example Rs, LKR or USD.');
     if (!Number.isFinite(b) || b < 0) return Alert.alert('Invalid budget', 'Enter a number, or leave it empty.');
+    const open = opening.trim() ? Number(opening.replace(/,/g, '')) : 0;
+    if (!Number.isFinite(open)) return Alert.alert('Invalid starting balance', 'Enter a number, e.g. 1000.');
     const startMidday = fromIsoDate(startText);
     if (startMidday == null) return Alert.alert('Invalid start date', 'Use the format YYYY-MM-DD, e.g. 2026-11-10.');
     const start = startOfDay(startMidday);
@@ -39,6 +43,7 @@ export function SettingsScreen() {
     await settings.update('currency', cur);
     await settings.update('currencyUserSet', '1');
     await settings.update('budget', String(b));
+    await settings.update('openingBalance', String(open));
     Alert.alert('Saved');
   };
 
@@ -92,6 +97,18 @@ export function SettingsScreen() {
         <Text style={{ color: t.muted, fontSize: 12, marginTop: 4 }}>
           Nothing before {settings.trackingStart ? formatDate(settings.trackingStart) : 'this date'} is counted, listed or
           imported from SMS. Older entries are hidden, not deleted.
+        </Text>
+        <Text style={[styles.label, { color: t.muted }]}>Starting balance</Text>
+        <TextInput
+          value={opening}
+          onChangeText={setOpening}
+          keyboardType="numbers-and-punctuation"
+          placeholder="e.g. 1000"
+          placeholderTextColor={t.muted}
+          style={[styles.input, { color: t.text, borderColor: t.border }]}
+        />
+        <Text style={{ color: t.muted, fontSize: 12, marginTop: 4 }}>
+          Money already in your account on the start date. Balance = starting balance + cash in − cash out.
         </Text>
         <Text style={[styles.label, { color: t.muted }]}>Monthly cash-out budget (optional)</Text>
         <TextInput

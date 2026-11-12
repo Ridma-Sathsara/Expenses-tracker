@@ -48,6 +48,14 @@ export function totalsByCategory(entries: readonly LedgerEntry[], type: EntryTyp
 /** The first day that counts. Anything earlier is left out of every total, list and SMS scan. */
 export const DEFAULT_TRACKING_START = new Date(2026, 10, 10).getTime(); // 10 Nov 2026, local midnight
 
+/** Money already in the account when tracking started. Editable in Settings. */
+export const DEFAULT_OPENING_BALANCE = 1000;
+
+/** What you have now: what you started with, plus everything in, minus everything out. */
+export function balance(opening: number, flow: CashFlow): number {
+  return round2(opening + flow.cashIn - flow.cashOut);
+}
+
 /** Clamp the start of a date range so it never reaches before the tracking start. */
 export function clampFrom(from: number, trackingStart: number): number {
   return Math.max(from, trackingStart);

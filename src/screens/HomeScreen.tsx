@@ -6,14 +6,14 @@ import { type EntryType, getCategory } from '../lib/categories';
 import { type Expense, listAllExpenses, listExpenses } from '../lib/db';
 import { daysInMonth, formatDate, formatDay, formatMoney, monthLabel, monthRange, startOfDay } from '../lib/format';
 import { useLoad, useSettings } from '../lib/hooks';
-import { cashFlow, outlook, totalsByCategory } from '../lib/ledger';
+import { balance, cashFlow, outlook, totalsByCategory } from '../lib/ledger';
 import { useTheme } from '../theme';
 
 const DAY = 86400000;
 
 export function HomeScreen() {
   const t = useTheme();
-  const { currency, budget, trackingStart } = useSettings();
+  const { currency, budget, trackingStart, openingBalance } = useSettings();
   const now = new Date();
   const [ym, setYm] = useState({ y: now.getFullYear(), m: now.getMonth() });
   const [from, to] = monthRange(ym.y, ym.m);
@@ -63,6 +63,7 @@ export function HomeScreen() {
   }, [entries, trackingStart]);
 
   const overall = useMemo(() => cashFlow(allEntries), [allEntries]);
+  const currentBalance = balance(openingBalance, overall);
   const { flow } = stats;
   const maxDaily = Math.max(1, ...stats.dailyOut);
   const budgetPct = budget > 0 ? flow.cashOut / budget : 0;
@@ -146,12 +147,15 @@ export function HomeScreen() {
 
       <View style={[styles.card, styles.rowBetween, { backgroundColor: t.card }]}>
         <View style={{ flex: 1 }}>
-          <Text style={{ color: t.muted, fontSize: 12 }}>Since {trackingStart ? formatDate(trackingStart) : '…'}</Text>
-          <Text style={{ color: overall.net >= 0 ? t.success : t.danger, fontSize: 20, fontWeight: '800' }}>
-            {signedMoney(overall.net)}
+          <Text style={{ color: t.muted, fontSize: 12 }}>Balance now</Text>
+          <Text style={{ color: currentBalance >= 0 ? t.success : t.danger, fontSize: 24, fontWeight: '800' }}>
+            {currentBalance < 0 ? '−' : ''}
+            {money(Math.abs(currentBalance))}
           </Text>
+          <Text style={{ color: t.muted, fontSize: 11 }}>since {trackingStart ? formatDate(trackingStart) : '…'}</Text>
         </View>
         <View style={{ alignItems: 'flex-end' }}>
+          <Text style={{ color: t.muted, fontWeight: '600' }}>Started with {money(openingBalance)}</Text>
           <Text style={{ color: t.success, fontWeight: '600' }}>In {money(overall.cashIn)}</Text>
           <Text style={{ color: t.text, fontWeight: '600' }}>Out {money(overall.cashOut)}</Text>
         </View>
