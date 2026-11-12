@@ -112,6 +112,46 @@ function findMerchant(text: string): string | null {
   return null;
 }
 
+// Sampath Bank transaction alerts (sender SAMPATHTXN) have one fixed layout:
+//   LKR 8,000.00 debited from AC **2750 for eCom Sri Lanka Telecom PLC Co 70000004 11/11/2026 13:00:45 To Inq Call ...
+//   LKR 6,985.00 debited from AC **2750 via POS at ASB INNOVATION (PVT) L KA 20400902 08/11/2026 14:16:47 ...
+//   LKR 7,000.00 credited to AC **2750 for to my 11/11/2026 12:59:03 ...
+const SAMPATH_RE =
+  /^LKR\s?([\d,]+(?:\.\d{1,2})?) (debited from|credited to) AC \S+(?: (?:via (\w+) at|for) (.*?))?\s*(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})/i;
+
+/**
+ * Exact parser for Sampath Bank alerts. Returns null when the text is not in that layout,
+ * so the generic parser can try it.
+ */
+export function parseSampathTxn(text: string, fallbackDate: number): BankSmsResult | null {
+  const m = text.match(SAMPATH_RE);
+  if (!m) return null;
+  const amount = parseNumber(m[1]);
+  if (!(amount > 0)) return null;
+  const type: EntryType = /credited/i.test(m[2]) ? 'income' : 'expense';
+  // Description: drop the channel prefix ("eCom") and the trailing terminal/reference number.
+  const description = (m[4] ?? '')
+    .replace(/^(ecom|pos|atm|online)\s+/i, '')
+    .replace(/\s+\d{6,}$/, '')
+    .trim();
+  // The time printed in the message is when the transaction happened; prefer it over the SMS arrival time.
+  const stamped = new Date(+m[7], +m[6] - 1, +m[5], +m[8], +m[9], +m[10]).getTime();
+  const date = Number.isNaN(stamped) ? fallbackDate : stamped;
+  const fallbackNote = type === 'income' ? 'Money received' : m[3] ? `${m[3].toUpperCase()} payment` : 'Bank payment';
+  return {
+    kind: type === 'income' ? 'credit' : 'debit',
+    expense: {
+      type,
+      amount,
+      currency: 'LKR',
+      merchant: description || null,
+      note: description ? description[0].toUpperCase() + description.slice(1) : fallbackNote,
+      category: guessCategory(description, type),
+      date,
+    },
+  };
+}
+
 /**
  * Parse a bank / card / wallet SMS alert.
  * Returns `debit` for money going out, `credit` for money coming in, or `ignored`.
@@ -119,6 +159,8 @@ function findMerchant(text: string): string | null {
 export function parseBankSms(body: string, date: number = Date.now()): BankSmsResult {
   const text = body.replace(/\s+/g, ' ').trim();
   if (!text) return { kind: 'ignored', reason: 'empty' };
+  const sampath = parseSampathTxn(text, date);
+  if (sampath) return sampath;
   if (OTP_RE.test(text)) return { kind: 'ignored', reason: 'otp' };
 
   let amounts = findAmounts(text);
