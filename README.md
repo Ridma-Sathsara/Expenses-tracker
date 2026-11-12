@@ -8,7 +8,7 @@ and all data is stored **only on your phone**.
 | | |
 |---|---|
 | 💬 **Chat to log expenses** | Type it like a text message: `lunch 1200`, `450 coffee`, `taxi 1.5k #transport`, `groceries 3200 yesterday`. Start with `+` or use words like `salary` / `received` for cash in: `+150000 salary`. Several lines add several entries. Commands: `today`, `week`, `month`, `balance`, `recent`, `undo`, `help`. |
-| ✉️ **Bank SMS import** (Android) | Reads bank and card alerts such as *"LKR 2,500.00 debited … at KEELLS SUPER"*, and credit alerts (*"LKR 50,000.00 credited…"*), works out the amount, merchant or sender and category, and skips OTPs, promotions and balance lines. Senders on the ignored list (COMBANK and SAMPATHOTP by default) are never counted. Import them yourself or turn on **auto-import**. |
+| ✉️ **Bank SMS import** (Android) | Reads bank and card alerts such as *"LKR 2,500.00 debited … at KEELLS SUPER"*, and credit alerts (*"LKR 50,000.00 credited…"*), works out the amount, merchant or sender and category, and skips OTPs, promotions and balance lines. Senders on the ignored list (COMBANK, SAMPATHOTP and VISHWAOTP by default) are never counted. Import them yourself or turn on **auto-import**. |
 | ↗️ **Share from any messaging app** | In WhatsApp, Messages, Telegram and other apps, long-press a message → **Share** → **Expense Tracker**. It's logged straight away. |
 | 🏠 **Cash-flow overview** | Cash in, cash out and net (in − out) for the month and since your tracking start date, a daily cash-out chart, breakdowns of where money went and came from, and a cash-out budget bar. |
 | 📅 **Tracking start date** | Nothing before the start date (default 10 Nov 2026, editable in Settings) is counted, listed or imported. Older entries are hidden, not deleted. |

@@ -27,9 +27,19 @@ test('SAMPATHOTP is blocked by default, other Sampath senders are not', () => {
 });
 
 test('new defaults are added once to a saved list', () => {
-  assert.deepEqual(mergeNewDefaults(['COMBANK', 'HNB'], ['COMBANK']), ['COMBANK', 'HNB', 'SAMPATHOTP']);
+  assert.deepEqual(mergeNewDefaults(['COMBANK', 'HNB'], ['COMBANK']), ['COMBANK', 'HNB', 'SAMPATHOTP', 'VISHWAOTP']);
   // user unblocked COMBANK earlier: it stays unblocked
-  assert.deepEqual(mergeNewDefaults(['HNB'], ['COMBANK']), ['HNB', 'SAMPATHOTP']);
+  assert.deepEqual(mergeNewDefaults(['HNB'], ['COMBANK']), ['HNB', 'SAMPATHOTP', 'VISHWAOTP']);
   // already offered: nothing forced back
-  assert.deepEqual(mergeNewDefaults(['HNB'], ['COMBANK', 'SAMPATHOTP']), ['HNB']);
+  assert.deepEqual(mergeNewDefaults(['HNB'], ['COMBANK', 'SAMPATHOTP', 'VISHWAOTP']), ['HNB']);
+});
+
+test('VISHWAOTP is blocked by default in any spelling', () => {
+  const D = DEFAULT_BLOCKED_SENDERS;
+  assert.equal(isBlockedSender('VishwaOTP', 'LKR 500 debited', D), true);
+  assert.equal(isBlockedSender('VISHWA OTP', 'Your OTP is 123456', D), true);
+  assert.equal(isBlockedSender('VISHWA-OTP', 'x', D), true);
+  assert.equal(isBlockedSender('Vishwa', 'LKR 500 debited at KEELLS', D), false);
+  // a list saved after SAMPATHOTP was added still gets VISHWAOTP once
+  assert.deepEqual(mergeNewDefaults(['COMBANK', 'SAMPATHOTP'], ['COMBANK', 'SAMPATHOTP']), ['COMBANK', 'SAMPATHOTP', 'VISHWAOTP']);
 });

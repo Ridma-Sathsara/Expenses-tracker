@@ -1,5 +1,5 @@
 /** Senders whose SMS are never treated as expenses. The user can edit this list on the SMS screen. */
-export const DEFAULT_BLOCKED_SENDERS = ['COMBANK', 'SAMPATHOTP'];
+export const DEFAULT_BLOCKED_SENDERS = ['COMBANK', 'SAMPATHOTP', 'VISHWAOTP'];
 
 /**
  * Adds defaults the user has not been offered yet to their saved list.
