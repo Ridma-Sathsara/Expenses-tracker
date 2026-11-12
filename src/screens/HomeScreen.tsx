@@ -2,61 +2,108 @@ import { useMemo, useState } from 'react';
 import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { ExpenseEditor } from '../components/ExpenseEditor';
 import { ExpenseRow } from '../components/ExpenseRow';
-import { CATEGORIES } from '../lib/categories';
-import { type Expense, listExpenses } from '../lib/db';
-import { daysInMonth, formatDay, formatMoney, monthLabel, monthRange, startOfDay } from '../lib/format';
+import { type EntryType, getCategory } from '../lib/categories';
+import { type Expense, listAllExpenses, listExpenses } from '../lib/db';
+import { daysInMonth, formatDate, formatDay, formatMoney, monthLabel, monthRange, startOfDay } from '../lib/format';
 import { useLoad, useSettings } from '../lib/hooks';
+import { cashFlow, outlook, totalsByCategory } from '../lib/ledger';
 import { useTheme } from '../theme';
+
+const DAY = 86400000;
 
 export function HomeScreen() {
   const t = useTheme();
-  const { currency, budget } = useSettings();
+  const { currency, budget, trackingStart } = useSettings();
   const now = new Date();
   const [ym, setYm] = useState({ y: now.getFullYear(), m: now.getMonth() });
   const [from, to] = monthRange(ym.y, ym.m);
-  const [expenses] = useLoad(() => listExpenses(from, to), [] as Expense[], [from, to]);
+  // listExpenses already leaves out anything before the tracking start.
+  const [entries] = useLoad(() => listExpenses(from, to), [] as Expense[], [from, to]);
+  const [allEntries] = useLoad(() => listAllExpenses(), [] as Expense[]);
   const [editing, setEditing] = useState<Expense | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [newType, setNewType] = useState<EntryType>('expense');
+
+  const money = (n: number) => formatMoney(n, currency);
+  const signedMoney = (n: number) => `${n >= 0 ? '+' : '−'}${money(Math.abs(n))}`;
 
   const isCurrentMonth = ym.y === now.getFullYear() && ym.m === now.getMonth();
+  // You can't browse to months that end before tracking began.
+  const isFirstMonth = from <= trackingStart;
   const shiftMonth = (d: number) => {
     const date = new Date(ym.y, ym.m + d, 1);
     setYm({ y: date.getFullYear(), m: date.getMonth() });
   };
 
   const stats = useMemo(() => {
-    const total = expenses.reduce((s, e) => s + e.amount, 0);
+    const flow = cashFlow(entries);
     const today = startOfDay(Date.now());
-    const todayTotal = expenses.filter((e) => startOfDay(e.date) === today).reduce((s, e) => s + e.amount, 0);
-    const byCat = CATEGORIES.map((c) => ({
-      ...c,
-      total: expenses.filter((e) => e.category === c.id).reduce((s, e) => s + e.amount, 0),
-    }))
-      .filter((c) => c.total > 0)
-      .sort((a, b) => b.total - a.total);
-    const dayCount = isCurrentMonth ? now.getDate() : daysInMonth(ym.y, ym.m);
-    const daily: number[] = Array.from({ length: daysInMonth(ym.y, ym.m) }, () => 0);
-    for (const e of expenses) daily[new Date(e.date).getDate() - 1] += e.amount;
-    const sections: { title: string; total: number; data: Expense[] }[] = [];
-    for (const e of expenses) {
+    const todayFlow = cashFlow(entries.filter((e) => startOfDay(e.date) === today));
+    const outByCat = totalsByCategory(entries, 'expense');
+    const inByCat = totalsByCategory(entries, 'income');
+
+    // Days that actually count this month: from the tracking start (if it falls in this month) up to today.
+    const firstDay = Math.max(from, startOfDay(trackingStart));
+    const lastDay = isCurrentMonth ? today : to - DAY;
+    const dayCount = Math.max(1, Math.round((lastDay - firstDay) / DAY) + 1);
+
+    const dailyOut: number[] = Array.from({ length: daysInMonth(ym.y, ym.m) }, () => 0);
+    for (const e of entries) if (e.type === 'expense') dailyOut[new Date(e.date).getDate() - 1] += e.amount;
+
+    const sections: { title: string; net: number; data: Expense[] }[] = [];
+    for (const e of entries) {
       const title = formatDay(e.date);
       let sec = sections[sections.length - 1];
-      if (!sec || sec.title !== title) sections.push((sec = { title, total: 0, data: [] }));
+      if (!sec || sec.title !== title) sections.push((sec = { title, net: 0, data: [] }));
       sec.data.push(e);
-      sec.total += e.amount;
+      sec.net += e.type === 'income' ? e.amount : -e.amount;
     }
-    return { total, todayTotal, byCat, avg: total / Math.max(1, dayCount), daily, sections };
+    return { flow, todayFlow, outByCat, inByCat, avgOut: flow.cashOut / dayCount, dailyOut, sections };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expenses]);
+  }, [entries, trackingStart]);
 
-  const maxDaily = Math.max(1, ...stats.daily);
-  const budgetPct = budget > 0 ? stats.total / budget : 0;
+  const overall = useMemo(() => cashFlow(allEntries), [allEntries]);
+  const { flow } = stats;
+  const maxDaily = Math.max(1, ...stats.dailyOut);
+  const budgetPct = budget > 0 ? flow.cashOut / budget : 0;
+  const hasData = flow.countIn + flow.countOut > 0;
+
+  const openNew = (type: EntryType) => {
+    setEditing(null);
+    setNewType(type);
+    setEditorOpen(true);
+  };
+
+  const breakdown = (title: string, rows: { category: string; total: number }[], total: number) =>
+    rows.length === 0 ? null : (
+      <>
+        <Text style={[styles.cardTitle, { color: t.text, marginTop: 16 }]}>{title}</Text>
+        {rows.map((r) => {
+          const c = getCategory(r.category);
+          return (
+            <View key={r.category} style={{ marginBottom: 10 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ color: t.text }}>
+                  {c.emoji} {c.label}
+                </Text>
+                <Text style={{ color: t.text, fontWeight: '600' }}>
+                  {money(r.total)} <Text style={{ color: t.muted }}>{Math.round((r.total / total) * 100)}%</Text>
+                </Text>
+              </View>
+              <View style={[styles.track, { backgroundColor: t.border, marginTop: 4 }]}>
+                <View style={[styles.fill, { width: `${(r.total / total) * 100}%`, backgroundColor: c.color }]} />
+              </View>
+            </View>
+          );
+        })}
+      </>
+    );
 
   const header = (
     <View>
       <View style={styles.monthRow}>
-        <Pressable onPress={() => shiftMonth(-1)} hitSlop={12}>
-          <Text style={[styles.arrow, { color: t.primary }]}>‹</Text>
+        <Pressable onPress={() => shiftMonth(-1)} hitSlop={12} disabled={isFirstMonth}>
+          <Text style={[styles.arrow, { color: isFirstMonth ? t.border : t.primary }]}>‹</Text>
         </Pressable>
         <Text style={[styles.month, { color: t.text }]}>{monthLabel(ym.y, ym.m)}</Text>
         <Pressable onPress={() => shiftMonth(1)} hitSlop={12} disabled={isCurrentMonth}>
@@ -65,13 +112,18 @@ export function HomeScreen() {
       </View>
 
       <View style={[styles.card, { backgroundColor: t.primary }]}>
-        <Text style={{ color: t.primaryText, opacity: 0.85 }}>Spent this month</Text>
-        <Text style={[styles.total, { color: t.primaryText }]}>{formatMoney(stats.total, currency)}</Text>
-        <View style={{ flexDirection: 'row', gap: 24 }}>
-          {isCurrentMonth ? (
-            <Text style={{ color: t.primaryText, opacity: 0.85 }}>Today: {formatMoney(stats.todayTotal, currency)}</Text>
-          ) : null}
-          <Text style={{ color: t.primaryText, opacity: 0.85 }}>Daily avg: {formatMoney(Math.round(stats.avg), currency)}</Text>
+        <Text style={{ color: t.primaryText, opacity: 0.85 }}>Net this month (in − out)</Text>
+        <Text style={[styles.total, { color: t.primaryText }]}>{signedMoney(flow.net)}</Text>
+        <Text style={{ color: t.primaryText, opacity: 0.95 }}>{outlook(flow, money)}</Text>
+        <View style={styles.tiles}>
+          <Pressable style={[styles.tile, { backgroundColor: '#FFFFFF22' }]} onPress={() => openNew('income')}>
+            <Text style={{ color: t.primaryText, opacity: 0.85, fontSize: 12 }}>💰 Cash in · {flow.countIn}</Text>
+            <Text style={[styles.tileValue, { color: t.primaryText }]}>{money(flow.cashIn)}</Text>
+          </Pressable>
+          <Pressable style={[styles.tile, { backgroundColor: '#FFFFFF22' }]} onPress={() => openNew('expense')}>
+            <Text style={{ color: t.primaryText, opacity: 0.85, fontSize: 12 }}>💸 Cash out · {flow.countOut}</Text>
+            <Text style={[styles.tileValue, { color: t.primaryText }]}>{money(flow.cashOut)}</Text>
+          </Pressable>
         </View>
         {budget > 0 ? (
           <View style={{ marginTop: 12 }}>
@@ -85,51 +137,54 @@ export function HomeScreen() {
             </View>
             <Text style={{ color: t.primaryText, opacity: 0.85, marginTop: 4, fontSize: 12 }}>
               {budgetPct > 1
-                ? `Over budget by ${formatMoney(stats.total - budget, currency)}`
-                : `${formatMoney(budget - stats.total, currency)} left of ${formatMoney(budget, currency)} budget`}
+                ? `Cash out is ${money(flow.cashOut - budget)} over your ${money(budget)} budget`
+                : `${money(budget - flow.cashOut)} of your ${money(budget)} budget still free`}
             </Text>
           </View>
         ) : null}
       </View>
 
-      {stats.total > 0 ? (
+      <View style={[styles.card, styles.rowBetween, { backgroundColor: t.card }]}>
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: t.muted, fontSize: 12 }}>Since {trackingStart ? formatDate(trackingStart) : '…'}</Text>
+          <Text style={{ color: overall.net >= 0 ? t.success : t.danger, fontSize: 20, fontWeight: '800' }}>
+            {signedMoney(overall.net)}
+          </Text>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={{ color: t.success, fontWeight: '600' }}>In {money(overall.cashIn)}</Text>
+          <Text style={{ color: t.text, fontWeight: '600' }}>Out {money(overall.cashOut)}</Text>
+        </View>
+      </View>
+
+      {hasData ? (
         <View style={[styles.card, { backgroundColor: t.card }]}>
-          <Text style={[styles.cardTitle, { color: t.text }]}>Daily spending</Text>
+          <View style={styles.rowBetween}>
+            <Text style={[styles.cardTitle, { color: t.text }]}>Daily cash out</Text>
+            <Text style={{ color: t.muted, fontSize: 12, marginBottom: 10 }}>
+              {isCurrentMonth ? `Today ${money(stats.todayFlow.cashOut)} · ` : ''}avg {money(Math.round(stats.avgOut))}/day
+            </Text>
+          </View>
           <View style={styles.bars}>
-            {stats.daily.map((v, i) => (
+            {stats.dailyOut.map((v, i) => (
               <View key={i} style={styles.barSlot}>
                 <View style={[styles.bar, { height: `${(v / maxDaily) * 100}%`, backgroundColor: v > 0 ? t.primary : t.border }]} />
               </View>
             ))}
           </View>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+          <View style={styles.rowBetween}>
             <Text style={{ color: t.muted, fontSize: 11 }}>1</Text>
-            <Text style={{ color: t.muted, fontSize: 11 }}>{stats.daily.length}</Text>
+            <Text style={{ color: t.muted, fontSize: 11 }}>{stats.dailyOut.length}</Text>
           </View>
-
-          <Text style={[styles.cardTitle, { color: t.text, marginTop: 16 }]}>By category</Text>
-          {stats.byCat.map((c) => (
-            <View key={c.id} style={{ marginBottom: 10 }}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                <Text style={{ color: t.text }}>
-                  {c.emoji} {c.label}
-                </Text>
-                <Text style={{ color: t.text, fontWeight: '600' }}>
-                  {formatMoney(c.total, currency)} <Text style={{ color: t.muted }}>{Math.round((c.total / stats.total) * 100)}%</Text>
-                </Text>
-              </View>
-              <View style={[styles.track, { backgroundColor: t.border, marginTop: 4 }]}>
-                <View style={[styles.fill, { width: `${(c.total / stats.total) * 100}%`, backgroundColor: c.color }]} />
-              </View>
-            </View>
-          ))}
+          {breakdown('Where cash went', stats.outByCat, flow.cashOut)}
+          {breakdown('Where cash came from', stats.inByCat, flow.cashIn)}
         </View>
       ) : (
         <View style={[styles.card, { backgroundColor: t.card, alignItems: 'center' }]}>
-          <Text style={{ fontSize: 40 }}>🧾</Text>
-          <Text style={{ color: t.text, fontWeight: '600', marginTop: 8 }}>No expenses yet</Text>
+          <Text style={{ fontSize: 40 }}>🌱</Text>
+          <Text style={{ color: t.text, fontWeight: '600', marginTop: 8 }}>A fresh start</Text>
           <Text style={{ color: t.muted, textAlign: 'center', marginTop: 4 }}>
-            Tap + to add one, type “lunch 1200” in Chat, or import your bank SMS.
+            Tap + to add cash in or cash out, type “+50000 salary” or “lunch 1200” in Chat, or import your bank SMS.
           </Text>
         </View>
       )}
@@ -147,7 +202,7 @@ export function HomeScreen() {
         renderSectionHeader={({ section }) => (
           <View style={styles.sectionHeader}>
             <Text style={{ color: t.muted, fontWeight: '700' }}>{section.title}</Text>
-            <Text style={{ color: t.muted }}>{formatMoney(section.total, currency)}</Text>
+            <Text style={{ color: section.net >= 0 ? t.success : t.muted }}>{signedMoney(section.net)}</Text>
           </View>
         )}
         renderItem={({ item }) => (
@@ -163,28 +218,31 @@ export function HomeScreen() {
           </View>
         )}
       />
-      <Pressable
-        onPress={() => {
-          setEditing(null);
-          setEditorOpen(true);
-        }}
-        style={[styles.fab, { backgroundColor: t.primary }]}
-        accessibilityLabel="Add expense"
-      >
+      <Pressable onPress={() => openNew('expense')} style={[styles.fab, { backgroundColor: t.primary }]} accessibilityLabel="Add entry">
         <Text style={{ color: t.primaryText, fontSize: 30, lineHeight: 32 }}>+</Text>
       </Pressable>
-      <ExpenseEditor visible={editorOpen} expense={editing} currency={currency} onClose={() => setEditorOpen(false)} />
+      <ExpenseEditor
+        visible={editorOpen}
+        expense={editing}
+        initialType={newType}
+        currency={currency}
+        onClose={() => setEditorOpen(false)}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   monthRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   arrow: { fontSize: 32, paddingHorizontal: 8 },
   month: { fontSize: 18, fontWeight: '700' },
   card: { borderRadius: 16, padding: 16, marginBottom: 16 },
   cardTitle: { fontSize: 15, fontWeight: '700', marginBottom: 10 },
   total: { fontSize: 34, fontWeight: '800', marginVertical: 6 },
+  tiles: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  tile: { flex: 1, borderRadius: 12, padding: 10 },
+  tileValue: { fontSize: 17, fontWeight: '800', marginTop: 2 },
   track: { height: 8, borderRadius: 4, overflow: 'hidden' },
   fill: { height: 8, borderRadius: 4 },
   bars: { flexDirection: 'row', height: 80, alignItems: 'flex-end', gap: 2 },

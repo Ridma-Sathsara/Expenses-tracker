@@ -12,23 +12,26 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { CATEGORIES, type CategoryId, guessCategory } from '../lib/categories';
-import { addExpense, deleteExpense, type Expense, updateExpense } from '../lib/db';
-import { fromIsoDate, toIsoDate } from '../lib/format';
+import { categoriesFor, type CategoryId, type EntryType, guessCategory } from '../lib/categories';
+import { addExpense, deleteExpense, type Expense, getTrackingStart, updateExpense } from '../lib/db';
+import { formatDate, fromIsoDate, toIsoDate } from '../lib/format';
 import { useTheme } from '../theme';
 
 type Props = {
   visible: boolean;
-  expense: Expense | null; // null = new expense
+  expense: Expense | null; // null = new entry
+  /** Direction to start with when creating a new entry. */
+  initialType?: EntryType;
   currency: string;
   onClose: () => void;
 };
 
 const DAY = 86400000;
 
-export function ExpenseEditor({ visible, expense, currency, onClose }: Props) {
+export function ExpenseEditor({ visible, expense, currency, initialType = 'expense', onClose }: Props) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
+  const [type, setType] = useState<EntryType>('expense');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [category, setCategory] = useState<CategoryId>('other');
@@ -37,16 +40,26 @@ export function ExpenseEditor({ visible, expense, currency, onClose }: Props) {
 
   useEffect(() => {
     if (!visible) return;
+    const startType = expense?.type ?? initialType;
+    setType(startType);
     setAmount(expense ? String(expense.amount) : '');
     setNote(expense?.note ?? '');
-    setCategory(expense?.category ?? 'other');
+    setCategory(expense?.category ?? (startType === 'income' ? 'income' : 'other'));
     setCategoryTouched(!!expense);
     setDateText(toIsoDate(expense?.date ?? Date.now()));
-  }, [visible, expense]);
+  }, [visible, expense, initialType]);
+
+  const switchType = (next: EntryType) => {
+    if (next === type) return;
+    setType(next);
+    // Categories differ per direction, so re-pick one that fits.
+    setCategory(guessCategory(note, next));
+    setCategoryTouched(false);
+  };
 
   const onNoteChange = (v: string) => {
     setNote(v);
-    if (!categoryTouched) setCategory(guessCategory(v));
+    if (!categoryTouched) setCategory(guessCategory(v, type));
   };
 
   const save = async () => {
@@ -60,9 +73,15 @@ export function ExpenseEditor({ visible, expense, currency, onClose }: Props) {
       Alert.alert('Invalid date', 'Use the format YYYY-MM-DD, e.g. 2026-11-06.');
       return;
     }
+    const trackingStart = await getTrackingStart();
+    if (parsedDate < trackingStart) {
+      Alert.alert('Date is too early', `Tracking starts on ${formatDate(trackingStart)}. You can change that in Settings.`);
+      return;
+    }
     // Keep the current time of day when the date is today, otherwise use midday.
     const date = toIsoDate(parsedDate) === toIsoDate(Date.now()) ? Date.now() : parsedDate;
-    const data = { amount: Math.round(value * 100) / 100, note: note.trim() || 'Expense', category, date };
+    const fallbackNote = type === 'income' ? 'Income' : 'Expense';
+    const data = { type, amount: Math.round(value * 100) / 100, note: note.trim() || fallbackNote, category, date };
     if (expense) {
       // Keep the original timestamp if the day didn't change.
       const sameDay = toIsoDate(expense.date) === toIsoDate(parsedDate);
@@ -75,7 +94,7 @@ export function ExpenseEditor({ visible, expense, currency, onClose }: Props) {
 
   const remove = () => {
     if (!expense) return;
-    Alert.alert('Delete expense?', `${expense.note}`, [
+    Alert.alert('Delete this entry?', `${expense.note}`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
@@ -100,12 +119,33 @@ export function ExpenseEditor({ visible, expense, currency, onClose }: Props) {
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <View style={[styles.sheet, { backgroundColor: t.card, paddingBottom: insets.bottom + 16 }]}>
           <View style={styles.header}>
-            <Text style={[styles.title, { color: t.text }]}>{expense ? 'Edit expense' : 'New expense'}</Text>
+            <Text style={[styles.title, { color: t.text }]}>{expense ? 'Edit entry' : 'New entry'}</Text>
             <Pressable onPress={onClose} hitSlop={12}>
               <Text style={{ color: t.muted, fontSize: 16 }}>Cancel</Text>
             </Pressable>
           </View>
           <ScrollView keyboardShouldPersistTaps="handled">
+            <View style={[styles.segment, { borderColor: t.border }]}>
+              {(
+                [
+                  { id: 'expense', label: '💸 Cash out', color: t.danger },
+                  { id: 'income', label: '💰 Cash in', color: t.success },
+                ] as const
+              ).map((o) => {
+                const active = o.id === type;
+                return (
+                  <Pressable
+                    key={o.id}
+                    onPress={() => switchType(o.id)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    style={[styles.segmentItem, active && { backgroundColor: o.color + '22', borderColor: o.color }]}
+                  >
+                    <Text style={{ color: active ? o.color : t.muted, fontWeight: '700' }}>{o.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
             <Text style={[styles.label, { color: t.muted }]}>Amount ({currency})</Text>
             <TextInput
               value={amount}
@@ -116,17 +156,17 @@ export function ExpenseEditor({ visible, expense, currency, onClose }: Props) {
               autoFocus={!expense}
               style={[styles.amountInput, { color: t.text, borderColor: t.border }]}
             />
-            <Text style={[styles.label, { color: t.muted }]}>What for?</Text>
+            <Text style={[styles.label, { color: t.muted }]}>{type === 'income' ? 'Where from?' : 'What for?'}</Text>
             <TextInput
               value={note}
               onChangeText={onNoteChange}
-              placeholder="e.g. Lunch at office"
+              placeholder={type === 'income' ? 'e.g. Salary, payment from client' : 'e.g. Lunch at office'}
               placeholderTextColor={t.muted}
               style={[styles.input, { color: t.text, borderColor: t.border }]}
             />
             <Text style={[styles.label, { color: t.muted }]}>Category</Text>
             <View style={styles.chips}>
-              {CATEGORIES.map((c) => {
+              {categoriesFor(type).map((c) => {
                 const active = c.id === category;
                 return (
                   <Pressable
@@ -195,6 +235,8 @@ const styles = StyleSheet.create({
   sheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '92%' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   title: { fontSize: 20, fontWeight: '700' },
+  segment: { flexDirection: 'row', borderWidth: 1, borderRadius: 12, padding: 4, gap: 4 },
+  segmentItem: { flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 9, borderWidth: 1, borderColor: 'transparent' },
   label: { fontSize: 13, marginTop: 14, marginBottom: 6, fontWeight: '600' },
   amountInput: { fontSize: 32, fontWeight: '700', borderBottomWidth: 1, paddingVertical: 6 },
   input: { fontSize: 16, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },

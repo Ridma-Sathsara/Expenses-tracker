@@ -3,12 +3,15 @@
  * Nothing is sent to any server.
  */
 import * as SQLite from 'expo-sqlite';
-import type { CategoryId } from './categories';
+import type { CategoryId, EntryType } from './categories';
+import { clampFrom, DEFAULT_TRACKING_START } from './ledger';
 
 export type ExpenseSource = 'manual' | 'chat' | 'sms' | 'share';
 
+/** One ledger entry: cash out (`expense`) or cash in (`income`). */
 export type Expense = {
   id: number;
+  type: EntryType;
   amount: number;
   category: CategoryId;
   note: string;
@@ -25,6 +28,7 @@ export type NewExpense = Omit<Expense, 'id' | 'createdAt' | 'merchant' | 'raw' |
 
 type Row = {
   id: number;
+  type: string;
   amount: number;
   category: string;
   note: string;
@@ -77,15 +81,51 @@ export function getDb(): Promise<SQLite.SQLiteDatabase> {
           created_at INTEGER NOT NULL
         );
       `);
+      await migrate(db);
       return db;
     })();
   }
   return dbPromise;
 }
 
+/**
+ * Schema migrations, tracked with SQLite's user_version so each step runs exactly once
+ * and existing data on the phone is kept when the app updates.
+ */
+async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
+  const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+  const version = row?.user_version ?? 0;
+  if (version < 1) {
+    // v1: cash in / cash out. Everything recorded before this was an expense.
+    const cols = await db.getAllAsync<{ name: string }>('PRAGMA table_info(expenses)');
+    if (!cols.some((c) => c.name === 'type')) {
+      await db.execAsync("ALTER TABLE expenses ADD COLUMN type TEXT NOT NULL DEFAULT 'expense';");
+    }
+    await db.execAsync('PRAGMA user_version = 1;');
+  }
+}
+
+// ---- Tracking start: nothing before this date is counted or listed ----
+
+let trackingStartCache: number | null = null;
+
+export async function getTrackingStart(): Promise<number> {
+  if (trackingStartCache == null) {
+    const raw = Number(await getSetting('trackingStart'));
+    trackingStartCache = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TRACKING_START;
+  }
+  return trackingStartCache;
+}
+
+export async function setTrackingStart(ms: number): Promise<void> {
+  trackingStartCache = ms;
+  await setSetting('trackingStart', String(ms));
+}
+
 function fromRow(r: Row): Expense {
   return {
     id: r.id,
+    type: r.type === 'income' ? 'income' : 'expense',
     amount: r.amount,
     category: r.category as CategoryId,
     note: r.note,
@@ -101,9 +141,9 @@ function fromRow(r: Row): Expense {
 export async function addExpense(e: NewExpense): Promise<number> {
   const db = await getDb();
   const res = await db.runAsync(
-    `INSERT OR IGNORE INTO expenses (amount, category, note, merchant, date, source, raw, sms_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    e.amount, e.category, e.note, e.merchant ?? null, e.date, e.source, e.raw ?? null, e.smsId ?? null, Date.now(),
+    `INSERT OR IGNORE INTO expenses (type, amount, category, note, merchant, date, source, raw, sms_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    e.type, e.amount, e.category, e.note, e.merchant ?? null, e.date, e.source, e.raw ?? null, e.smsId ?? null, Date.now(),
   );
   emitChange();
   return res.lastInsertRowId;
@@ -115,8 +155,8 @@ export async function updateExpense(id: number, e: Partial<NewExpense>): Promise
   if (!current) return;
   const merged = { ...fromRow(current), ...e };
   await db.runAsync(
-    'UPDATE expenses SET amount = ?, category = ?, note = ?, merchant = ?, date = ? WHERE id = ?',
-    merged.amount, merged.category, merged.note, merged.merchant, merged.date, id,
+    'UPDATE expenses SET type = ?, amount = ?, category = ?, note = ?, merchant = ?, date = ? WHERE id = ?',
+    merged.type, merged.amount, merged.category, merged.note, merged.merchant, merged.date, id,
   );
   emitChange();
 }
@@ -127,34 +167,19 @@ export async function deleteExpense(id: number): Promise<void> {
   emitChange();
 }
 
-export async function getExpense(id: number): Promise<Expense | null> {
-  const db = await getDb();
-  const r = await db.getFirstAsync<Row>('SELECT * FROM expenses WHERE id = ?', id);
-  return r ? fromRow(r) : null;
-}
-
+/** Entries in [from, to), newest first. Never returns anything before the tracking start. */
 export async function listExpenses(from: number, to: number): Promise<Expense[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Row>(
     'SELECT * FROM expenses WHERE date >= ? AND date < ? ORDER BY date DESC, id DESC',
-    from, to,
+    clampFrom(from, await getTrackingStart()), to,
   );
   return rows.map(fromRow);
 }
 
+/** Every entry since the tracking start, newest first. */
 export async function listAllExpenses(): Promise<Expense[]> {
-  const db = await getDb();
-  const rows = await db.getAllAsync<Row>('SELECT * FROM expenses ORDER BY date DESC, id DESC');
-  return rows.map(fromRow);
-}
-
-export async function sumBetween(from: number, to: number): Promise<number> {
-  const db = await getDb();
-  const r = await db.getFirstAsync<{ total: number | null }>(
-    'SELECT SUM(amount) AS total FROM expenses WHERE date >= ? AND date < ?',
-    from, to,
-  );
-  return r?.total ?? 0;
+  return listExpenses(0, Number.MAX_SAFE_INTEGER);
 }
 
 export async function deleteAllExpenses(): Promise<void> {

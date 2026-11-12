@@ -29,7 +29,10 @@ export function ExpenseRow({ expense, currency, onPress }: { expense: Expense; c
           {source ? ` · ${source}` : ''}
         </Text>
       </View>
-      <Text style={[styles.amount, { color: t.text }]}>{formatMoney(expense.amount, currency)}</Text>
+      <Text style={[styles.amount, { color: expense.type === 'income' ? t.success : t.text }]}>
+        {expense.type === 'income' ? '+' : '−'}
+        {formatMoney(expense.amount, currency)}
+      </Text>
     </Pressable>
   );
 }

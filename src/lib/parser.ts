@@ -1,5 +1,5 @@
 /**
- * Turns messages into expenses.
+ * Turns messages into cash-out (expense) and cash-in (income) entries.
  *
  * Two kinds of input are understood:
  *  1. Bank / card / wallet SMS alerts, e.g.
@@ -8,9 +8,11 @@
  *
  * Everything here is pure TypeScript with no React Native imports, so it can be unit tested in Node.
  */
-import { CategoryId, guessCategory, isCategoryId } from './categories';
+import { CategoryId, type EntryType, guessCategory, isCategoryId, isIncomeCategory } from './categories';
 
 export type ParsedExpense = {
+  /** 'expense' = cash out, 'income' = cash in. */
+  type: EntryType;
   amount: number;
   currency: string | null;
   note: string;
@@ -21,7 +23,8 @@ export type ParsedExpense = {
 
 export type BankSmsResult =
   | { kind: 'debit'; expense: ParsedExpense }
-  | { kind: 'credit'; amount: number }
+  /** Money coming in; `expense.type` is 'income'. */
+  | { kind: 'credit'; expense: ParsedExpense }
   /** Has an amount but no clear debit wording — offered to the user, unticked. */
   | { kind: 'maybe'; expense: ParsedExpense }
   | { kind: 'ignored'; reason: string };
@@ -57,6 +60,7 @@ const MERCHANT_RES = [
   new RegExp(String.raw`\b(?:to|towards|in favou?r of|merchant:?)\s+` + MERCHANT_TAIL, 'i'),
   new RegExp(String.raw`\bfor\s+(?:a\s+)?` + MERCHANT_TAIL, 'i'),
 ];
+const SOURCE_RE = new RegExp(String.raw`\b(?:from|by)\s+` + MERCHANT_TAIL, 'i');
 const NOT_MERCHANT_RE = new RegExp(`^(${CUR}|\\d|your\\b|the\\b|a\\/c|acct|account|card|x{2,})`, 'i');
 
 export function parseNumber(raw: string): number {
@@ -95,6 +99,11 @@ function cleanMerchant(raw: string | undefined): string | null {
   return s;
 }
 
+/** Who sent the money in a credit alert ("... from SAMAN PERERA"). */
+function findSource(text: string): string | null {
+  return cleanMerchant(text.match(SOURCE_RE)?.[1]);
+}
+
 function findMerchant(text: string): string | null {
   for (const re of MERCHANT_RES) {
     const m = cleanMerchant(text.match(re)?.[1]);
@@ -127,15 +136,30 @@ export function parseBankSms(body: string, date: number = Date.now()): BankSmsRe
     (debitIdx >= 0 && (creditIdx < 0 || debitIdx < creditIdx)) || (creditIdx < 0 && WEAK_DEBIT_RE.test(text));
   const isCredit = creditIdx >= 0 && !isDebit;
 
-  if (isCredit) return { kind: 'credit', amount: amounts[0].amount };
+  const { amount, currency } = amounts[0];
+  if (isCredit) {
+    const from = findSource(text);
+    return {
+      kind: 'credit',
+      expense: {
+        type: 'income',
+        amount,
+        currency,
+        merchant: from,
+        note: from ? `From ${from}` : 'Money received',
+        category: guessCategory(text, 'income'),
+        date,
+      },
+    };
+  }
   if (!isDebit && PROMO_RE.test(text)) return { kind: 'ignored', reason: 'promotion' };
 
-  const { amount, currency } = amounts[0];
   const merchant = findMerchant(text);
   const note = merchant ?? 'Card / bank payment';
   return {
     kind: isDebit ? 'debit' : 'maybe',
     expense: {
+      type: 'expense',
       amount,
       currency,
       merchant,
@@ -146,6 +170,9 @@ export function parseBankSms(body: string, date: number = Date.now()): BankSmsRe
   };
 }
 
+const INCOME_WORDS_RE = /\b(income|salary|received|got paid|earned|bonus|refund(ed)?|cash ?in|cashback|dividend)\b/i;
+// Words that mark the line as income but add nothing to the note ("received 5000 from saman" -> "From saman").
+const INCOME_FILLER_RE = /\b(income|received|got paid|earned|cash ?in)\b/gi;
 const QUICK_NUM_RE = /^(\d+(?:[.,]\d+)?)(k)?$/i;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -171,11 +198,20 @@ export function parseQuickEntry(line: string, now: number = Date.now()): ParsedE
     text = text.replace(/\btoday\b/i, ' ');
   }
 
+  // Cash in: a leading "+" or words like "salary", "received", "income".
+  let type: EntryType = 'expense';
+  if (/^\+/.test(text) || INCOME_WORDS_RE.test(text)) {
+    type = 'income';
+    text = text.replace(/^\+\s*/, '').replace(INCOME_FILLER_RE, ' ');
+  }
+
   let category: CategoryId | null = null;
   text = text.replace(/#(\w+)/g, (_, tag: string) => {
     const t = tag.toLowerCase();
-    if (!category && isCategoryId(t)) category = t;
-    else if (!category) category = guessCategory(t);
+    if (!category && isCategoryId(t)) {
+      category = t;
+      type = isIncomeCategory(t) ? 'income' : 'expense';
+    } else if (!category) category = guessCategory(t, type);
     return ' ';
   });
 
@@ -205,11 +241,12 @@ export function parseQuickEntry(line: string, now: number = Date.now()): ParsedE
     .trim();
 
   return {
+    type,
     amount: Math.round(amount * 100) / 100,
     currency,
     merchant: null,
-    note: note ? note[0].toUpperCase() + note.slice(1) : 'Expense',
-    category: category ?? guessCategory(note),
+    note: note ? note[0].toUpperCase() + note.slice(1) : type === 'income' ? 'Income' : 'Expense',
+    category: category ?? guessCategory(note, type),
     date,
   };
 }
@@ -222,7 +259,7 @@ export function parseMessage(text: string, now: number = Date.now()): ParsedExpe
     text.length > 40 && (DEBIT_RE.test(text) || CREDIT_RE.test(text)) && findAmounts(text).length > 0;
   if (looksLikeBankSms) {
     const r = parseBankSms(text, now);
-    return r.kind === 'debit' ? [r.expense] : [];
+    return r.kind === 'debit' || r.kind === 'credit' ? [r.expense] : [];
   }
   return text
     .split(/\n|;/)

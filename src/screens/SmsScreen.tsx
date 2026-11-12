@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Switch, Text
 import { hasSmsPermission, isSmsSupported, requestSmsPermission } from '../../modules/sms-reader';
 import { getCategory } from '../lib/categories';
 import { clearIgnoredSms, countIgnoredSms, ignoreSms, setSetting } from '../lib/db';
-import { formatDay, formatMoney } from '../lib/format';
+import { formatDate, formatDay, formatMoney } from '../lib/format';
 import { useSettings } from '../lib/hooks';
 import { findSmsExpenses, getBlockedSenders, importSmsCandidates, setBlockedSenders, type SmsCandidate } from '../lib/sms';
 import { useTheme } from '../theme';
@@ -16,7 +16,7 @@ const RANGES = [
 
 export function SmsScreen() {
   const t = useTheme();
-  const { currency, smsAutoImport } = useSettings();
+  const { currency, smsAutoImport, trackingStart } = useSettings();
   const [granted, setGranted] = useState(hasSmsPermission());
   const [days, setDays] = useState(30);
   const [loading, setLoading] = useState(false);
@@ -42,7 +42,7 @@ export function SmsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [days, granted]);
+  }, [days, granted, trackingStart]);
 
   useEffect(() => {
     scan();
@@ -65,9 +65,9 @@ export function SmsScreen() {
     return (
       <View style={[styles.center, { padding: 24 }]}>
         <Text style={{ fontSize: 40 }}>✉️</Text>
-        <Text style={[styles.h, { color: t.text }]}>Track spending from bank SMS</Text>
+        <Text style={[styles.h, { color: t.text }]}>Track cash in and out from bank SMS</Text>
         <Text style={{ color: t.muted, textAlign: 'center', marginBottom: 20 }}>
-          Allow access to your SMS so the app can find bank and card alerts like “LKR 2,500 debited at …” and log them as expenses.
+          Allow access to your SMS so the app can find bank and card alerts like “LKR 2,500 debited at …” or “LKR 50,000 credited” and log them as cash out and cash in.
           Messages are read only on this phone and never uploaded anywhere.
         </Text>
         <Pressable
@@ -94,7 +94,7 @@ export function SmsScreen() {
     await importSmsCandidates(chosen);
     await ignoreSms(skipped);
     await setSetting('smsLastSync', String(Date.now()));
-    Alert.alert('Done', `Imported ${chosen.length} expense${chosen.length === 1 ? '' : 's'}.`);
+    Alert.alert('Done', `Imported ${chosen.length} entr${chosen.length === 1 ? 'y' : 'ies'}.`);
     scan();
   };
 
@@ -110,7 +110,7 @@ export function SmsScreen() {
         <View style={styles.rowBetween}>
           <View style={{ flex: 1, paddingRight: 12 }}>
             <Text style={{ color: t.text, fontWeight: '700' }}>Auto-import new bank SMS</Text>
-            <Text style={{ color: t.muted, fontSize: 12 }}>Every time you open the app, new alerts are added automatically.</Text>
+            <Text style={{ color: t.muted, fontSize: 12 }}>Every time you open the app, new debit and credit alerts are added automatically.</Text>
           </View>
           <Switch
             value={smsAutoImport}
@@ -125,14 +125,14 @@ export function SmsScreen() {
       <View style={[styles.card, { backgroundColor: t.card, marginHorizontal: 16, marginBottom: 8 }]}>
         <Text style={{ color: t.text, fontWeight: '700' }}>Ignored senders</Text>
         <Text style={{ color: t.muted, fontSize: 12, marginBottom: 8 }}>
-          SMS from these senders are never counted as expenses (already-imported ones are removed).
+          SMS from these senders are never counted (already-imported ones are removed).
         </Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           {blocked.map((b) => (
             <Pressable
               key={b}
               onPress={() =>
-                Alert.alert(`Track ${b} again?`, `SMS from ${b} will be counted as expenses again.`, [
+                Alert.alert(`Track ${b} again?`, `SMS from ${b} will be counted again.`, [
                   { text: 'Cancel', style: 'cancel' },
                   { text: 'Unblock', onPress: () => updateBlocked(blocked.filter((x) => x !== b)) },
                 ])
@@ -179,7 +179,7 @@ export function SmsScreen() {
           contentContainerStyle={{ padding: 16, paddingBottom: 100, gap: 8 }}
           ListEmptyComponent={
             <Text style={{ color: t.muted, textAlign: 'center', marginTop: 40 }}>
-              No new bank transactions found in this period.
+              No new bank transactions found{trackingStart ? ` since ${formatDate(trackingStart)}` : ''}.
             </Text>
           }
           ListFooterComponent={
@@ -209,7 +209,10 @@ export function SmsScreen() {
                   {!item.sure ? (
                     <Text style={[styles.maybe, { color: t.muted, borderColor: t.border }]}>Maybe</Text>
                   ) : null}
-                  <Text style={{ color: t.text, fontWeight: '700' }}>{formatMoney(item.expense.amount, currency)}</Text>
+                  <Text style={{ color: item.expense.type === 'income' ? t.success : t.text, fontWeight: '700' }}>
+                    {item.expense.type === 'income' ? '+' : '−'}
+                    {formatMoney(item.expense.amount, currency)}
+                  </Text>
                 </View>
                 <Text style={{ color: t.muted, fontSize: 12, marginTop: 2 }}>
                   {formatDay(item.sms.date)} · from {item.sms.address ?? 'unknown'}

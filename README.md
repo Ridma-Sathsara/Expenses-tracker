@@ -1,16 +1,17 @@
 # 💸 Expense Tracker
 
-A mobile app (React Native + Expo) that tracks your expenses. You can log spending by sending it a message,
+A mobile app (React Native + Expo) that tracks your **cash in and cash out**. You can log money by sending it a message,
 and all data is stored **only on your phone**.
 
 ## Features
 
 | | |
 |---|---|
-| 💬 **Chat to log expenses** | Type it like a text message: `lunch 1200`, `450 coffee`, `taxi 1.5k #transport`, `groceries 3200 yesterday`. Several lines add several expenses. Commands: `today`, `week`, `month`, `recent`, `undo`, `help`. |
-| ✉️ **Bank SMS import** (Android) | Reads bank and card alerts such as *"LKR 2,500.00 debited … at KEELLS SUPER"*, works out the amount, merchant and category, and skips OTPs, credits and balance lines. Import them yourself or turn on **auto-import**. |
+| 💬 **Chat to log expenses** | Type it like a text message: `lunch 1200`, `450 coffee`, `taxi 1.5k #transport`, `groceries 3200 yesterday`. Start with `+` or use words like `salary` / `received` for cash in: `+150000 salary`. Several lines add several entries. Commands: `today`, `week`, `month`, `balance`, `recent`, `undo`, `help`. |
+| ✉️ **Bank SMS import** (Android) | Reads bank and card alerts such as *"LKR 2,500.00 debited … at KEELLS SUPER"*, and credit alerts (*"LKR 50,000.00 credited…"*), works out the amount, merchant or sender and category, and skips OTPs, promotions and balance lines. Senders on the ignored list (COMBANK by default) are never counted. Import them yourself or turn on **auto-import**. |
 | ↗️ **Share from any messaging app** | In WhatsApp, Messages, Telegram and other apps, long-press a message → **Share** → **Expense Tracker**. It's logged straight away. |
-| 🏠 **Monthly overview** | Total for the month and today, daily average, a daily spending chart, a category breakdown, and a monthly budget bar. |
+| 🏠 **Cash-flow overview** | Cash in, cash out and net (in − out) for the month and since your tracking start date, a daily cash-out chart, breakdowns of where money went and came from, and a cash-out budget bar. |
+| 📅 **Tracking start date** | Nothing before the start date (default 10 Nov 2026, editable in Settings) is counted, listed or imported. Older entries are hidden, not deleted. |
 | ✏️ **Edit anything** | Tap an expense to change its amount, note, category or date, or delete it. |
 | 📤 **CSV export** | Back up or open your data in Excel or Google Sheets. |
 | 🔒 **Private** | Uses on-device SQLite. There's no server, account or internet access involved. |
@@ -48,7 +49,8 @@ src/
   screens/                Home, Chat, SMS, Settings
   components/             ExpenseEditor (add/edit sheet), ExpenseRow
   lib/
-    parser.ts             turns messages / bank SMS into expenses (unit tested)
+    parser.ts             turns messages / bank SMS into cash-in / cash-out entries (unit tested)
+    ledger.ts             cash-flow maths: in, out, net, tracking start (unit tested)
     categories.ts         categories + keyword-based auto-categorisation
     chatBot.ts            chat commands and replies
     db.ts                 SQLite storage
