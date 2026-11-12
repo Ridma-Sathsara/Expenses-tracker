@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isBlockedSender } from '../senders';
+import { DEFAULT_BLOCKED_SENDERS, isBlockedSender, mergeNewDefaults } from '../senders';
 
 const B = ['COMBANK'];
 
@@ -16,4 +16,20 @@ test('does not block other banks', () => {
   assert.equal(isBlockedSender('SAMPATH', 'Paid LKR 500 to COMBANK credit card', B), false);
   assert.equal(isBlockedSender(null, 'LKR 500 debited', B), false);
   assert.equal(isBlockedSender('COMBANK', 'x', []), false);
+});
+
+test('SAMPATHOTP is blocked by default, other Sampath senders are not', () => {
+  const D = DEFAULT_BLOCKED_SENDERS;
+  assert.equal(isBlockedSender('SampathOTP', 'LKR 500 debited', D), true);
+  assert.equal(isBlockedSender('SAMPATH-OTP', 'Your OTP is 123456', D), true);
+  assert.equal(isBlockedSender('SAMPATH', 'LKR 500 debited at KEELLS', D), false);
+  assert.equal(isBlockedSender('SampathBank', 'LKR 500 debited at KEELLS', D), false);
+});
+
+test('new defaults are added once to a saved list', () => {
+  assert.deepEqual(mergeNewDefaults(['COMBANK', 'HNB'], ['COMBANK']), ['COMBANK', 'HNB', 'SAMPATHOTP']);
+  // user unblocked COMBANK earlier: it stays unblocked
+  assert.deepEqual(mergeNewDefaults(['HNB'], ['COMBANK']), ['HNB', 'SAMPATHOTP']);
+  // already offered: nothing forced back
+  assert.deepEqual(mergeNewDefaults(['HNB'], ['COMBANK', 'SAMPATHOTP']), ['HNB']);
 });

@@ -2,7 +2,7 @@ import { readInbox, hasSmsPermission, isSmsSupported, type Sms } from '../../mod
 import { parseBankSms, type ParsedExpense } from './parser';
 import { addExpense, deleteExpensesBySmsIds, getHandledSmsIds, getSetting, getTrackingStart, setSetting } from './db';
 import { clampFrom } from './ledger';
-import { DEFAULT_BLOCKED_SENDERS, isBlockedSender, normalizeSender } from './senders';
+import { DEFAULT_BLOCKED_SENDERS, isBlockedSender, mergeNewDefaults, normalizeSender } from './senders';
 
 export type SmsCandidate = { sms: Sms; expense: ParsedExpense; sure: boolean };
 
@@ -13,7 +13,17 @@ export async function getBlockedSenders(): Promise<string[]> {
   if (raw == null) return DEFAULT_BLOCKED_SENDERS;
   try {
     const list = JSON.parse(raw);
-    return Array.isArray(list) ? list.filter((x) => typeof x === 'string') : DEFAULT_BLOCKED_SENDERS;
+    if (!Array.isArray(list)) return DEFAULT_BLOCKED_SENDERS;
+    const saved = list.filter((x): x is string => typeof x === 'string');
+    // A saved list predates newer defaults (e.g. SAMPATHOTP): add each new default once.
+    // 'COMBANK' was the only default when lists were first saved.
+    const seen: string[] = JSON.parse((await getSetting('blockedDefaultsSeen')) ?? '["COMBANK"]');
+    const merged = mergeNewDefaults(saved, seen);
+    if (DEFAULT_BLOCKED_SENDERS.some((d) => !seen.includes(d))) {
+      await setSetting('blockedDefaultsSeen', JSON.stringify(DEFAULT_BLOCKED_SENDERS));
+      if (merged.length !== saved.length) await setSetting('blockedSenders', JSON.stringify(merged));
+    }
+    return merged;
   } catch {
     return DEFAULT_BLOCKED_SENDERS;
   }
@@ -22,6 +32,7 @@ export async function getBlockedSenders(): Promise<string[]> {
 export async function setBlockedSenders(list: string[]): Promise<void> {
   const clean = [...new Set(list.map(normalizeSender).filter(Boolean))];
   await setSetting('blockedSenders', JSON.stringify(clean));
+  await setSetting('blockedDefaultsSeen', JSON.stringify(DEFAULT_BLOCKED_SENDERS));
   await removeBlockedSenderExpenses();
 }
 

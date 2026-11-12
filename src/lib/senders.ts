@@ -1,5 +1,15 @@
 /** Senders whose SMS are never treated as expenses. The user can edit this list on the SMS screen. */
-export const DEFAULT_BLOCKED_SENDERS = ['COMBANK'];
+export const DEFAULT_BLOCKED_SENDERS = ['COMBANK', 'SAMPATHOTP'];
+
+/**
+ * Adds defaults the user has not been offered yet to their saved list.
+ * `seen` is the set of defaults already applied once, so a default the user later
+ * unblocked is not forced back on.
+ */
+export function mergeNewDefaults(saved: string[], seen: string[]): string[] {
+  const fresh = DEFAULT_BLOCKED_SENDERS.filter((d) => !seen.includes(d) && !saved.includes(d));
+  return [...saved, ...fresh];
+}
 
 function norm(s: string): string {
   return s.toUpperCase().replace(/[^A-Z0-9]/g, '');
