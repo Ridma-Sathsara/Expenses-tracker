@@ -1,45 +1,31 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_BLOCKED_SENDERS, isBlockedSender, mergeNewDefaults } from '../senders';
+import { DEFAULT_TRACKED_SENDERS, isTrackedSender, normalizeSender } from '../senders';
 
-const B = ['COMBANK'];
+const T = DEFAULT_TRACKED_SENDERS;
 
-test('blocks COMBANK sender ids in any form', () => {
-  assert.equal(isBlockedSender('COMBANK', 'LKR 500 debited', B), true);
-  assert.equal(isBlockedSender('ComBank', 'LKR 500 debited', B), true);
-  assert.equal(isBlockedSender('AD-COMBANK', 'LKR 500 debited', B), true);
-  assert.equal(isBlockedSender('+94112353353', 'COMBANK: LKR 500 debited at KEELLS', B), true);
+test('only SAMPATHTXN is tracked by default', () => {
+  assert.deepEqual(T, ['SAMPATHTXN']);
 });
 
-test('does not block other banks', () => {
-  assert.equal(isBlockedSender('HNB', 'LKR 500 debited', B), false);
-  assert.equal(isBlockedSender('SAMPATH', 'Paid LKR 500 to COMBANK credit card', B), false);
-  assert.equal(isBlockedSender(null, 'LKR 500 debited', B), false);
-  assert.equal(isBlockedSender('COMBANK', 'x', []), false);
+test('SAMPATHTXN matches in any spelling', () => {
+  for (const from of ['SAMPATHTXN', 'SampathTxn', 'Sampath-TXN', 'SAMPATH TXN', 'AD-SAMPATHTXN']) {
+    assert.equal(isTrackedSender(from, T), true, from);
+  }
 });
 
-test('SAMPATHOTP is blocked by default, other Sampath senders are not', () => {
-  const D = DEFAULT_BLOCKED_SENDERS;
-  assert.equal(isBlockedSender('SampathOTP', 'LKR 500 debited', D), true);
-  assert.equal(isBlockedSender('SAMPATH-OTP', 'Your OTP is 123456', D), true);
-  assert.equal(isBlockedSender('SAMPATH', 'LKR 500 debited at KEELLS', D), false);
-  assert.equal(isBlockedSender('SampathBank', 'LKR 500 debited at KEELLS', D), false);
+test('every other sender is ignored', () => {
+  for (const from of ['COMBANK', 'SAMPATHOTP', 'VishwaOTP', 'SAMPATH', 'SampathBank', 'HNB', '+94771234567', '', null]) {
+    assert.equal(isTrackedSender(from, T), false, String(from));
+  }
 });
 
-test('new defaults are added once to a saved list', () => {
-  assert.deepEqual(mergeNewDefaults(['COMBANK', 'HNB'], ['COMBANK']), ['COMBANK', 'HNB', 'SAMPATHOTP', 'VISHWAOTP']);
-  // user unblocked COMBANK earlier: it stays unblocked
-  assert.deepEqual(mergeNewDefaults(['HNB'], ['COMBANK']), ['HNB', 'SAMPATHOTP', 'VISHWAOTP']);
-  // already offered: nothing forced back
-  assert.deepEqual(mergeNewDefaults(['HNB'], ['COMBANK', 'SAMPATHOTP', 'VISHWAOTP']), ['HNB']);
+test('message text never makes a sender tracked; empty list tracks nothing', () => {
+  assert.equal(isTrackedSender('COMBANK', T), false);
+  assert.equal(isTrackedSender('SAMPATHTXN', []), false);
 });
 
-test('VISHWAOTP is blocked by default in any spelling', () => {
-  const D = DEFAULT_BLOCKED_SENDERS;
-  assert.equal(isBlockedSender('VishwaOTP', 'LKR 500 debited', D), true);
-  assert.equal(isBlockedSender('VISHWA OTP', 'Your OTP is 123456', D), true);
-  assert.equal(isBlockedSender('VISHWA-OTP', 'x', D), true);
-  assert.equal(isBlockedSender('Vishwa', 'LKR 500 debited at KEELLS', D), false);
-  // a list saved after SAMPATHOTP was added still gets VISHWAOTP once
-  assert.deepEqual(mergeNewDefaults(['COMBANK', 'SAMPATHOTP'], ['COMBANK', 'SAMPATHOTP']), ['COMBANK', 'SAMPATHOTP', 'VISHWAOTP']);
+test('normalizeSender cleans user input', () => {
+  assert.equal(normalizeSender(' sampath-txn '), 'SAMPATHTXN');
+  assert.equal(normalizeSender(' - '), '');
 });

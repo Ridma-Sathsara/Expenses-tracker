@@ -5,7 +5,7 @@ import { getCategory } from '../lib/categories';
 import { clearIgnoredSms, countIgnoredSms, ignoreSms, setSetting } from '../lib/db';
 import { formatDate, formatDay, formatMoney } from '../lib/format';
 import { useSettings } from '../lib/hooks';
-import { findSmsExpenses, getBlockedSenders, importSmsCandidates, setBlockedSenders, type SmsCandidate } from '../lib/sms';
+import { findSmsExpenses, getTrackedSenders, importSmsCandidates, setTrackedSenders, type SmsCandidate } from '../lib/sms';
 import { useTheme } from '../theme';
 
 const RANGES = [
@@ -23,7 +23,7 @@ export function SmsScreen() {
   const [items, setItems] = useState<SmsCandidate[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [skipped, setSkipped] = useState(0);
-  const [blocked, setBlocked] = useState<string[]>([]);
+  const [tracked, setTracked] = useState<string[]>([]);
   const [newSender, setNewSender] = useState('');
 
   const scan = useCallback(async () => {
@@ -36,7 +36,7 @@ export function SmsScreen() {
       setItems(found);
       setSelected(new Set(found.filter((f) => f.sure).map((f) => f.sms.id)));
       setSkipped(await countIgnoredSms());
-      setBlocked(await getBlockedSenders());
+      setTracked(await getTrackedSenders());
     } catch (e) {
       Alert.alert('Could not read SMS', String(e));
     } finally {
@@ -67,7 +67,7 @@ export function SmsScreen() {
         <Text style={{ fontSize: 40 }}>✉️</Text>
         <Text style={[styles.h, { color: t.text }]}>Track cash in and out from bank SMS</Text>
         <Text style={{ color: t.muted, textAlign: 'center', marginBottom: 20 }}>
-          Allow access to your SMS so the app can find bank and card alerts like “LKR 2,500 debited at …” or “LKR 50,000 credited” and log them as cash out and cash in.
+          Allow access to your SMS so the app can find alerts from your tracked senders (SAMPATHTXN by default) like “LKR 2,500 debited at …” or “LKR 50,000 credited” and log them as cash out and cash in.
           Messages are read only on this phone and never uploaded anywhere.
         </Text>
         <Pressable
@@ -98,8 +98,8 @@ export function SmsScreen() {
     scan();
   };
 
-  const updateBlocked = async (list: string[]) => {
-    await setBlockedSenders(list);
+  const updateTracked = async (list: string[]) => {
+    await setTrackedSenders(list);
     setNewSender('');
     scan();
   };
@@ -123,23 +123,24 @@ export function SmsScreen() {
       </View>
 
       <View style={[styles.card, { backgroundColor: t.card, marginHorizontal: 16, marginBottom: 8 }]}>
-        <Text style={{ color: t.text, fontWeight: '700' }}>Ignored senders</Text>
+        <Text style={{ color: t.text, fontWeight: '700' }}>Tracked senders</Text>
         <Text style={{ color: t.muted, fontSize: 12, marginBottom: 8 }}>
-          SMS from these senders are never counted (already-imported ones are removed).
+          Only SMS from these senders are counted. Every other SMS is ignored
+          {tracked.length === 0 ? ' — add a sender to start tracking SMS.' : '.'}
         </Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          {blocked.map((b) => (
+          {tracked.map((b) => (
             <Pressable
               key={b}
               onPress={() =>
-                Alert.alert(`Track ${b} again?`, `SMS from ${b} will be counted again.`, [
+                Alert.alert(`Stop tracking ${b}?`, `SMS from ${b} will be ignored and entries already imported from it removed.`, [
                   { text: 'Cancel', style: 'cancel' },
-                  { text: 'Unblock', onPress: () => updateBlocked(blocked.filter((x) => x !== b)) },
+                  { text: 'Stop tracking', style: 'destructive', onPress: () => updateTracked(tracked.filter((x) => x !== b)) },
                 ])
               }
-              style={[styles.chip, { borderColor: t.danger }]}
+              style={[styles.chip, { borderColor: t.success }]}
             >
-              <Text style={{ color: t.text }}>🚫 {b} ✕</Text>
+              <Text style={{ color: t.text }}>✅ {b} ✕</Text>
             </Pressable>
           ))}
           <TextInput
@@ -148,7 +149,7 @@ export function SmsScreen() {
             placeholder="Add sender, e.g. HNB"
             placeholderTextColor={t.muted}
             autoCapitalize="characters"
-            onSubmitEditing={() => newSender.trim() && updateBlocked([...blocked, newSender])}
+            onSubmitEditing={() => newSender.trim() && updateTracked([...tracked, newSender])}
             returnKeyType="done"
             style={[styles.senderInput, { color: t.text, borderColor: t.border }]}
           />
@@ -179,7 +180,7 @@ export function SmsScreen() {
           contentContainerStyle={{ padding: 16, paddingBottom: 100, gap: 8 }}
           ListEmptyComponent={
             <Text style={{ color: t.muted, textAlign: 'center', marginTop: 40 }}>
-              No new bank transactions found{trackingStart ? ` since ${formatDate(trackingStart)}` : ''}.
+              No new transactions from your tracked senders{trackingStart ? ` since ${formatDate(trackingStart)}` : ''}.
             </Text>
           }
           ListFooterComponent={

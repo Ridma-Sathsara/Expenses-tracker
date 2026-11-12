@@ -2,71 +2,62 @@ import { readInbox, hasSmsPermission, isSmsSupported, type Sms } from '../../mod
 import { parseBankSms, type ParsedExpense } from './parser';
 import { addExpense, deleteExpensesBySmsIds, getHandledSmsIds, getSetting, getTrackingStart, setSetting } from './db';
 import { clampFrom } from './ledger';
-import { DEFAULT_BLOCKED_SENDERS, isBlockedSender, mergeNewDefaults, normalizeSender } from './senders';
+import { DEFAULT_TRACKED_SENDERS, isTrackedSender, normalizeSender } from './senders';
 
 export type SmsCandidate = { sms: Sms; expense: ParsedExpense; sure: boolean };
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export async function getBlockedSenders(): Promise<string[]> {
-  const raw = await getSetting('blockedSenders');
-  if (raw == null) return DEFAULT_BLOCKED_SENDERS;
+export async function getTrackedSenders(): Promise<string[]> {
+  const raw = await getSetting('trackedSenders');
+  if (raw == null) return DEFAULT_TRACKED_SENDERS;
   try {
     const list = JSON.parse(raw);
-    if (!Array.isArray(list)) return DEFAULT_BLOCKED_SENDERS;
-    const saved = list.filter((x): x is string => typeof x === 'string');
-    // A saved list predates newer defaults (e.g. SAMPATHOTP): add each new default once.
-    // 'COMBANK' was the only default when lists were first saved.
-    const seen: string[] = JSON.parse((await getSetting('blockedDefaultsSeen')) ?? '["COMBANK"]');
-    const merged = mergeNewDefaults(saved, seen);
-    if (DEFAULT_BLOCKED_SENDERS.some((d) => !seen.includes(d))) {
-      await setSetting('blockedDefaultsSeen', JSON.stringify(DEFAULT_BLOCKED_SENDERS));
-      if (merged.length !== saved.length) await setSetting('blockedSenders', JSON.stringify(merged));
-    }
-    return merged;
+    return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string') : DEFAULT_TRACKED_SENDERS;
   } catch {
-    return DEFAULT_BLOCKED_SENDERS;
+    return DEFAULT_TRACKED_SENDERS;
   }
 }
 
-export async function setBlockedSenders(list: string[]): Promise<void> {
+export async function setTrackedSenders(list: string[]): Promise<void> {
   const clean = [...new Set(list.map(normalizeSender).filter(Boolean))];
-  await setSetting('blockedSenders', JSON.stringify(clean));
-  await setSetting('blockedDefaultsSeen', JSON.stringify(DEFAULT_BLOCKED_SENDERS));
-  await removeBlockedSenderExpenses();
+  await setSetting('trackedSenders', JSON.stringify(clean));
+  await removeUntrackedSenderEntries();
 }
 
 /**
- * Deletes already-imported expenses whose SMS came from a blocked sender.
- * Runs once per change of the blocked list (it reads the whole inbox, so not on every launch).
+ * Deletes already-imported SMS entries whose sender is not on the tracked list
+ * (for example entries imported by earlier versions that read every bank SMS).
+ * Entries added by hand, in chat or by sharing are never touched.
+ * Runs once per change of the list (it reads the whole inbox, so not on every launch).
  */
-export async function removeBlockedSenderExpenses(): Promise<number> {
+export async function removeUntrackedSenderEntries(): Promise<number> {
   if (!isSmsSupported || !hasSmsPermission()) return 0;
-  const blocked = await getBlockedSenders();
-  const key = JSON.stringify(blocked);
-  if ((await getSetting('blockedSendersCleaned')) === key) return 0;
+  const tracked = await getTrackedSenders();
+  const key = JSON.stringify(tracked);
+  if ((await getSetting('trackedSendersCleaned')) === key) return 0;
   const inbox = await readInbox(0, 50000);
-  const ids = inbox.filter((m) => isBlockedSender(m.address, m.body, blocked)).map((m) => m.id);
+  const ids = inbox.filter((m) => !isTrackedSender(m.address, tracked)).map((m) => m.id);
   const removed = await deleteExpensesBySmsIds(ids);
-  await setSetting('blockedSendersCleaned', key);
+  await setSetting('trackedSendersCleaned', key);
   return removed;
 }
 
 /**
- * SMS from the last `days` days — but never before the tracking start — that show money going out
- * or coming in and are not yet imported/skipped.
+ * SMS from tracked senders in the last `days` days — but never before the tracking start — that show
+ * money going out or coming in and are not yet imported/skipped.
  * `sure: false` items have an amount but no clear "debited/credited" wording.
  */
 export async function findSmsExpenses(days: number, includeMaybe = true): Promise<SmsCandidate[]> {
   if (!isSmsSupported || !hasSmsPermission()) return [];
-  const [messages, handled, blocked] = await Promise.all([
+  const [messages, handled, tracked] = await Promise.all([
     readInbox(clampFrom(Date.now() - days * DAY, await getTrackingStart()), 5000),
     getHandledSmsIds(),
-    getBlockedSenders(),
+    getTrackedSenders(),
   ]);
   const out: SmsCandidate[] = [];
   for (const sms of messages) {
-    if (handled.has(sms.id) || isBlockedSender(sms.address, sms.body, blocked)) continue;
+    if (handled.has(sms.id) || !isTrackedSender(sms.address, tracked)) continue;
     const r = parseBankSms(sms.body, sms.date);
     if (r.kind === 'debit' || r.kind === 'credit') out.push({ sms, expense: r.expense, sure: true });
     else if (r.kind === 'maybe' && includeMaybe) out.push({ sms, expense: r.expense, sure: false });
@@ -97,7 +88,7 @@ export async function importSmsCandidates(list: SmsCandidate[]): Promise<number>
  */
 export async function autoImportSms(): Promise<number> {
   if (!isSmsSupported || !hasSmsPermission()) return 0;
-  await removeBlockedSenderExpenses();
+  await removeUntrackedSenderEntries();
   if ((await getSetting('smsAutoImport')) !== '1') return 0;
   const last = Number((await getSetting('smsLastSync')) ?? 0);
   // Versions before cash-in support only imported debits. Once, go back to the tracking start so
